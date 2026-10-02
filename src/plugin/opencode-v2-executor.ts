@@ -3,7 +3,7 @@
  *
  * 调用链（全部基于 @opencode/plugin 2.0.22 已核实的类型）：
  *   execute(task)
- *     -> session.create({ parentID, title })   创建子会话（挂在主会话下，TUI 可导航）
+ *     -> session.create({ parentID, title, agent?, model? })  创建子会话（挂在主会话下，TUI 可导航）
  *     -> session.prompt({ sessionID, text })   投递用户消息（V2 为 inbox 异步模型，
  *                                               返回 SessionInboxUser 而非 assistant 内容）
  *     -> session.wait({ sessionID })           等待会话空闲（处理完成）
@@ -20,6 +20,13 @@ import type { AgentExecutor, AgentResult, AgentTask } from "../runtime/executor.
 /** plugin context 的 session 域类型（避免在多处直接依赖 @opencode/plugin） */
 export type SessionDomain = Plugin.Context["session"]
 
+/** 子会话使用的模型引用（对应 models 列表中的 providerID/id） */
+export interface ExecutorModelRef {
+  id: string
+  providerID: string
+  variant?: string
+}
+
 export interface OpenCodeV2ExecutorOptions {
   /** OpenCode V2 plugin context 提供的 session 域 */
   session: SessionDomain
@@ -27,18 +34,29 @@ export interface OpenCodeV2ExecutorOptions {
   parentSessionId?: string
   /** 子会话标题前缀，默认 "workflow" */
   titlePrefix?: string
+  /**
+   * 子会话使用的模型。不指定时子会话会用默认 agent 的默认模型，
+   * 可能与主会话模型不一致（实测 CLI --model 不会传导到 session.create）。
+   */
+  model?: ExecutorModelRef
+  /** 子会话使用的 OpenCode agent 名（如 build / explore / plan） */
+  agent?: string
 }
 
 export class OpenCodeV2Executor implements AgentExecutor {
   private readonly session: SessionDomain
   private readonly parentSessionId?: string
   private readonly titlePrefix: string
+  private readonly model?: ExecutorModelRef
+  private readonly agent?: string
   private counter = 0
 
   constructor(options: OpenCodeV2ExecutorOptions) {
     this.session = options.session
     this.parentSessionId = options.parentSessionId
     this.titlePrefix = options.titlePrefix ?? "workflow"
+    this.model = options.model
+    this.agent = options.agent
   }
 
   async execute(task: AgentTask): Promise<AgentResult> {
@@ -47,6 +65,8 @@ export class OpenCodeV2Executor implements AgentExecutor {
     const created = await this.session.create({
       parentID: this.parentSessionId,
       title: `${this.titlePrefix}#${this.counter}`,
+      model: this.model,
+      agent: this.agent,
     })
 
     const sessionID = created.id
@@ -73,11 +93,18 @@ export class OpenCodeV2Executor implements AgentExecutor {
         if (output.length > 0) {
           return { output }
         }
+        // assistant 存在但无文本：带出底层错误信息（如 provider 限流），便于排查
+        const detail = message.error
+          ? `${message.error.type ?? "error"}: ${message.error.message ?? "unknown"}`
+          : "assistant message has no text parts"
+        throw new Error(
+          `[agentic-workflow] session ${sessionID} failed: ${detail}`,
+        )
       }
     }
 
     throw new Error(
-      `[agentic-workflow] session ${sessionID} finished without assistant text output`,
+      `[agentic-workflow] session ${sessionID} finished without assistant message`,
     )
   }
 }
