@@ -17,6 +17,7 @@
  */
 
 import type { AgentResult } from "../runtime/executor.js"
+import { WorkflowError } from "../runtime/errors.js"
 import { agent } from "../workflow/agent.js"
 import { parallel } from "../workflow/parallel.js"
 import { phase } from "../workflow/phase.js"
@@ -48,7 +49,7 @@ export interface VerifyResult {
 }
 
 /** assertVerify 失败时抛出，携带完整 VerifyResult 供失败策略消费 */
-export class WorkflowVerifyError extends Error {
+export class WorkflowVerifyError extends WorkflowError {
   readonly result: VerifyResult
 
   constructor(result: VerifyResult) {

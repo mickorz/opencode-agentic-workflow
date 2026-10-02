@@ -19,8 +19,10 @@ export interface CheckResult {
   detail?: string
 }
 
+import { WorkflowError } from "../runtime/errors.js"
+
 /** assert 失败时抛出的错误，携带完整 CheckResult 供上层失败策略消费 */
-export class WorkflowCheckError extends Error {
+export class WorkflowCheckError extends WorkflowError {
   readonly result: CheckResult
 
   constructor(result: CheckResult) {
