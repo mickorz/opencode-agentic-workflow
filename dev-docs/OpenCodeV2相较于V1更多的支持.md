@@ -1472,3 +1472,150 @@ Agentic Workflow
 而不是 `opencode-dynamicworkflows-v2`。
 
 因为 OpenCode V2 提供的这些一等扩展能力，已经足够让你把项目从“**Workflow 调度插件**”往真正的“**Agent Runtime Orchestration Framework**”推进一层。
+
+对，这其实是你现在新开 `opencode-agentic-workflow` 的最好时机。
+
+你在 v1 里自己补的很多东西，本质上是在“填 OpenCode 平台能力的空缺”，例如：
+
+- Agent 读写目录白名单 / 权限隔离
+- 子 Agent 独立上下文
+- 上下文裁剪、避免主会话污染
+- Tool 可用范围控制
+- Worktree 隔离
+- Session 生命周期管理
+- 执行状态、事件、可观测性
+- Workflow 状态持久化
+
+到了 v2，这些已经明显开始变成 OpenCode 原生能力，所以新版最重要的原则应该是：
+
+> **不要把 v1 自研基础设施原样搬过去，而是保留 Workflow 语义，把基础能力尽量下沉给 OpenCode v2。**
+
+可以把两代架构理解成：
+
+```text
+V1
+
+opencode-dynamicworkflows
+├─ Workflow DSL
+├─ Agent orchestration
+├─ Permission          ← 自己补
+├─ Context             ← 自己补
+├─ Session             ← 自己封装
+├─ Worktree            ← 自己补
+├─ State / Journal     ← 自己做
+├─ Observability       ← 自己做
+└─ TUI
+```
+
+到了 v2：
+
+```text
+V2
+
+opencode-agentic-workflow
+
+        Workflow Layer
+             │
+ ┌───────────┼───────────┐
+ ▼           ▼           ▼
+Control    Quality     Agent Node
+ Flow
+ │           │           │
+sequence   verify        │
+parallel   check         │
+race       checkpoint    │
+fallback                 │
+                         ▼
+              OpenCode V2 Runtime
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+       Session       Permission       Context
+       Agent         Tool             Storage
+       Model         Skill            Worktree
+       MCP           Event            RPC
+```
+
+这样你真正需要维护的代码量反而可能比 v1 **少很多**。
+
+而且还有一个更大的变化：以前你的 `agent()` 主要表示“启动一个子 Agent”，新版可以让它代表完整的 **Agent Execution Environment**：
+
+```js
+agent("实现登录模块", {
+  agent: "coding",
+  model: "xxx",
+
+  context: {
+    inherit: false
+  },
+
+  permissions: {
+    read: ["docs/**", "src/client/**"],
+    write: ["src/client/**"]
+  },
+
+  skills: ["unity-client"],
+
+  tools: ["read", "grep", "edit"],
+
+  worktree: true
+})
+```
+
+也就是说，一个 Node 不只是：
+
+```text
+Task + Model
+```
+
+而是：
+
+```text
+Task
++ Agent
++ Model
++ Context
++ Permissions
++ Tools
++ Skills
++ MCP
++ Workspace
+```
+
+这也是我觉得 **Agentic Workflow** 这个名字比 **Dynamic Workflow** 更适合新版的原因。
+
+另外，有几个你以前特别想解决的问题，在 v2 里应该直接列成新版的核心设计目标：
+
+```text
+01 Agent Capability Isolation
+   每个 Agent 独立权限 / Tools / Skills / MCP
+
+02 Context Isolation
+   每个 Agent 明确决定继承什么上下文
+
+03 Session Isolation
+   每个 Workflow Node 独立 Session
+
+04 Workspace Isolation
+   并行 Agent 独立 Worktree
+
+05 Deterministic Control Flow
+   sequence / parallel / fallback / race / check
+
+06 Quality Control
+   check → verify → checkpoint
+
+07 Observability
+   Event + Trace + RPC + TUI
+
+08 Persistence
+   Workflow State + Resume + Checkpoint
+```
+
+其中 **01、02、03、04、07 的底层能力可以大量依赖 OpenCode v2**；你真正需要持续做强的是 **05、06、08 + Workflow DSL**。
+
+这会让新版的边界清晰很多：
+
+> **OpenCode v2 负责 Agent Runtime，你的项目负责 Agent Workflow Orchestration。**
+
+这个架构边界我建议从 `v0.1.0` 就定死，不然后面很容易再次变成“OpenCode 缺什么，你插件自己实现什么”的大杂烩。
