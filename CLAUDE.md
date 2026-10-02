@@ -19,6 +19,7 @@
    | 问题排查 | `dev-docs/troubleshooting/` | Bug 分析、故障排查、复盘 |
    | 调研笔记 | `dev-docs/research/` | 技术调研、选型对比、学习笔记 |
    | 任务计划 | `dev-docs/planning/` | 任务拆解、进度计划、里程碑 |
+   | 执行进度 | `dev-docs/progress/` | 阶段性进度总结、里程碑状态 |
    | 使用指南 | `dev-docs/guides/` | 操作手册、环境搭建、工作流说明 |
    | 经验沉淀 | `dev-docs/experience/` | 踩坑记录、问题解决方案、经验教训 |
 
