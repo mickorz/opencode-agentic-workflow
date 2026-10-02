@@ -1,6 +1,6 @@
 {
   "name": "opencode-agentic-workflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentic workflow engine for OpenCode V2: workflow core + V2 adapter",
   "type": "module",
   "license": "MIT",

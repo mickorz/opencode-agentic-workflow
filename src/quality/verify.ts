@@ -85,7 +85,7 @@ function buildReviewerPrompt(
     artifact,
     "=== 产物结束 ===",
     "",
-    '只输出 JSON，不要任何其他文字，格式：',
+    '只输出 JSON，不要任何其他文字，也不要调用任何工具，直接给出结论，格式：',
     '{"verdict":"pass|fail","summary":"一句话结论","issues":["问题1","问题2"]}',
     "pass 与 fail 只能二选一；没有问题时 issues 为空数组。",
   ].join("\n")

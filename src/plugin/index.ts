@@ -27,6 +27,7 @@ import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
+import { runReliableWorkflow } from "../workflow/reliable.js"
 import { runSmokeWorkflow } from "../workflow/smoke.js"
 
 export default Plugin.define({
@@ -40,6 +41,8 @@ export default Plugin.define({
       agent?: string
       concurrency?: number
       checkpoint?: { mode?: CheckpointPolicy }
+      /** reliable workflow 的 check 步骤命令 */
+      checkCommand?: string
     }
 
     const executor = withConcurrencyLimit(
@@ -65,8 +68,9 @@ export default Plugin.define({
       editor.add({
         name: "workflow",
         description:
-          "Run an agentic workflow (P0: 3 parallel analysis agents + 1 summary agent). " +
-          "Pass a topic to analyze; returns the summary agent's final output. " +
+          "Run an agentic workflow. flow=smoke (default): 3 parallel analysis agents + summary. " +
+          "flow=reliable: agent -> check -> verify -> checkpoint reliable chain. " +
+          "Pass a topic; returns the workflow's final output. " +
           "Do NOT call this tool from inside a workflow; do the work directly instead.",
         input: {
           type: "object",
@@ -74,6 +78,11 @@ export default Plugin.define({
             topic: {
               type: "string",
               description: "The topic to analyze",
+            },
+            flow: {
+              type: "string",
+              enum: ["smoke", "reliable"],
+              description: "Workflow flavor, default smoke",
             },
           },
           required: ["topic"],
@@ -84,7 +93,9 @@ export default Plugin.define({
           type: "string",
         } as Record<string, unknown>,
         async execute(input: unknown) {
-          const topic = (input as { topic?: unknown }).topic
+          const parsed = (input as { topic?: unknown; flow?: unknown }) ?? {}
+          const topic = parsed.topic
+          const flow = parsed.flow === "reliable" ? "reliable" : "smoke"
           if (typeof topic !== "string" || topic.length === 0) {
             // 注意：工具内校验失败返回文本而非抛错，避免主 agent 重试风暴
             return { output: "[agentic-workflow] error: topic must be a non-empty string" }
@@ -98,8 +109,13 @@ export default Plugin.define({
           }
           workflowDepth += 1
           try {
-            const result = await runSmokeWorkflow(topic)
-            return { output: result.output }
+            const result =
+              flow === "reliable"
+                ? await runReliableWorkflow(topic, {
+                    checkCommand: options.checkCommand,
+                  })
+                : await runSmokeWorkflow(topic)
+            return { output: typeof result === "string" ? result : result.output }
           } catch (error) {
             // 抛错会诱发主 agent 无限重试工具调用（实测 22 轮重试耗尽配额）。
             // 失败信息以结果文本返回，让主 agent 停止重试并向用户报告。
