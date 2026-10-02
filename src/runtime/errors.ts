@@ -75,3 +75,40 @@ export class WorkflowParallelError extends WorkflowError {
     this.mode = mode
   }
 }
+
+/** retry 重试耗尽 */
+export class WorkflowRetryError extends WorkflowError {
+  /** 已尝试次数（含首次） */
+  readonly attempts: number
+  /** 最后一次失败的原始异常（通常为 WorkflowError 家族成员） */
+  readonly lastError: unknown
+  readonly label: string
+
+  constructor(attempts: number, lastError: unknown, label: string) {
+    const message = lastError instanceof Error ? lastError.message : String(lastError)
+    super(`retry exhausted (${attempts} attempts${label ? `, ${label}` : ""}): ${message}`, {
+      cause: lastError,
+    })
+    this.name = "WorkflowRetryError"
+    this.attempts = attempts
+    this.lastError = lastError
+    this.label = label
+  }
+}
+
+/** fallback 全部候选失败 */
+export class WorkflowFallbackError extends WorkflowError {
+  /** 按尝试顺序排列的各候选失败 */
+  readonly errors: unknown[]
+  readonly label: string
+
+  constructor(errors: unknown[], label: string) {
+    super(
+      `fallback exhausted (${errors.length} candidate${errors.length > 1 ? "s" : ""}${label ? `, ${label}` : ""}): ` +
+        errors.map((e) => (e instanceof Error ? e.message : String(e))).join("; "),
+    )
+    this.name = "WorkflowFallbackError"
+    this.errors = errors
+    this.label = label
+  }
+}
