@@ -108,4 +108,30 @@ export class RunJournal {
     }
     await this.store.saveRun(this.run)
   }
+
+  /**
+   * 重新打开已收口的 run（resume 场景）：
+   * failed/aborted -> running；未完成步骤重置 pending（连同 input/output/时间戳/错误），
+   * completed 步骤原样保留（resume 的续跑依据）。
+   */
+  async reopen(): Promise<void> {
+    if (this.run.status === "running") return
+    if (this.run.status === "completed") {
+      throw new Error(`cannot reopen completed run: ${this.run.runId}`)
+    }
+    this.run.status = "running"
+    this.run.completedAt = undefined
+    this.run.failure = undefined
+    for (const step of this.run.steps) {
+      if (step.status !== "completed") {
+        step.status = "pending"
+        step.error = undefined
+        step.input = undefined
+        step.output = undefined
+        step.startedAt = undefined
+        step.completedAt = undefined
+      }
+    }
+    await this.store.saveRun(this.run)
+  }
 }
