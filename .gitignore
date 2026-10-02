@@ -1,0 +1,5 @@
+# 第三方依赖/外部代码
+thirdparties/
+
+# macOS
+.DS_Store
