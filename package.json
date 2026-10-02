@@ -1,0 +1,25 @@
+{
+  "name": "opencode-agentic-workflow",
+  "version": "0.1.0",
+  "description": "Agentic workflow engine for OpenCode V2: workflow core + V2 adapter",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/plugin/index.js",
+  "types": "./dist/plugin/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.0.22"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
