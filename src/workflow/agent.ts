@@ -2,13 +2,30 @@
  * agent() —— 提交单个子 agent 任务
  *
  * 不感知 ctx / OpenCode：只经由 requireExecutor() 拿到当前绑定的
- * AgentExecutor 并执行。P0 不做 permissions / retry / timeout /
- * verify / token metrics / context isolation。
+ * AgentExecutor 并执行。P2.4 起派发 agent.started / completed / failed 事件。
  */
 
 import type { AgentResult } from "../runtime/executor.js"
 import { requireExecutor } from "../runtime/engine.js"
+import { emitEvent, preview } from "../observability/events.js"
 
 export async function agent(prompt: string): Promise<AgentResult> {
-  return requireExecutor().execute({ prompt })
+  emitEvent({ type: "agent.started", promptPreview: preview(prompt) })
+  const startedAt = Date.now()
+  try {
+    const result = await requireExecutor().execute({ prompt })
+    emitEvent({
+      type: "agent.completed",
+      durationMs: Date.now() - startedAt,
+      outputLength: result.output.length,
+    })
+    return result
+  } catch (error) {
+    emitEvent({
+      type: "agent.failed",
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
 }

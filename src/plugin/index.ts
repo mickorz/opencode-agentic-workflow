@@ -21,10 +21,12 @@
  */
 
 import { Plugin } from "@opencode/plugin"
+import path from "node:path"
 
 import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
+import { createFileTraceSink } from "../observability/trace.js"
 import {
   InteractiveCheckpointGate,
   type InteractiveCheckpointOptions,
@@ -47,6 +49,8 @@ export default Plugin.define({
       checkpoint?: { mode?: CheckpointPolicy | "interactive" } & InteractiveCheckpointOptions
       /** reliable workflow 的 check 步骤命令 */
       checkCommand?: string
+      /** 事件 trace 落盘目录（JSONL，观测用；不配置则不落盘） */
+      traceDir?: string
     }
 
     const executor = withConcurrencyLimit(
@@ -74,6 +78,18 @@ export default Plugin.define({
       )
     } else {
       setCheckpointGate(new PolicyCheckpointGate(options.checkpoint?.mode))
+    }
+
+    // observability（P2.4）：可选 JSONL 事件 trace 落盘
+    // 注意：相对路径以项目目录（ctx.location.directory）为基准——
+    // 插件运行在 opencode service 进程内，其 cwd 不是项目目录
+    if (options.traceDir) {
+      const traceDir = path.isAbsolute(options.traceDir)
+        ? options.traceDir
+        : path.join(ctx.location.directory, options.traceDir)
+      const traceFile = path.join(traceDir, "events.jsonl")
+      createFileTraceSink(traceFile)
+      console.log(`[agentic-workflow] event trace sink: ${traceFile}`)
     }
 
     // 递归防护：workflow 运行期间，子会话里的 agent 也可能看到并调用 workflow 工具，

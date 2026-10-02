@@ -18,6 +18,7 @@
  */
 
 import { WorkflowSequenceError, WorkflowStepError } from "../runtime/errors.js"
+import { emitEvent } from "../observability/events.js"
 import { RunJournal } from "../state/recorder.js"
 import type { ExecutionStore } from "../state/store.js"
 
@@ -55,13 +56,21 @@ async function runLoop<T>(
   for (let i = fromIndex; i < steps.length; i++) {
     const step = steps[i]
     if (!step) continue
+    const stepStartedAt = Date.now()
     try {
+      emitEvent({ type: "step.started", index: i })
       await journal?.stepStarted(i, result)
       result = await step(result)
       await journal?.stepCompleted(i, result)
+      emitEvent({ type: "step.completed", index: i, durationMs: Date.now() - stepStartedAt })
     } catch (cause) {
       const stepError = new WorkflowStepError(i, cause, options?.stepNames?.[i])
       await journal?.stepFailed(i, cause)
+      emitEvent({
+        type: "step.failed",
+        index: i,
+        error: cause instanceof Error ? cause.message : String(cause),
+      })
       if (onFailure === "fail-fast") {
         const sequenceError = new WorkflowSequenceError([stepError], result)
         await journal?.fail(sequenceError)

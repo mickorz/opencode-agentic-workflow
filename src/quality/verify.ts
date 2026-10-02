@@ -18,6 +18,7 @@
 
 import type { AgentResult } from "../runtime/executor.js"
 import { WorkflowError } from "../runtime/errors.js"
+import { emitEvent } from "../observability/events.js"
 import { agent } from "../workflow/agent.js"
 import { parallel } from "../workflow/parallel.js"
 import { phase } from "../workflow/phase.js"
@@ -145,6 +146,14 @@ export async function verify(
     `[agentic-workflow] verify ${passed ? "ok" : "FAIL"}: ${label} ` +
       `(${verdicts.filter((v) => v.verdict === "pass").length}/${verdicts.length} pass)`,
   )
+
+  emitEvent({
+    type: "verify.completed",
+    label,
+    passed,
+    passedCount: verdicts.filter((v) => v.verdict === "pass").length,
+    totalCount: verdicts.length,
+  })
 
   return { label, passed, verdicts }
 }

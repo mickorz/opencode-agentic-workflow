@@ -12,6 +12,7 @@
  */
 
 import { WorkflowError } from "../runtime/errors.js"
+import { emitEvent } from "../observability/events.js"
 import { phase } from "../workflow/phase.js"
 
 export interface CheckpointRequest {
@@ -79,11 +80,15 @@ export async function checkpoint(
   const label = options?.label ?? "checkpoint"
   phase(`Checkpoint(${label})`)
 
+  emitEvent({ type: "checkpoint.waiting", label, message })
+
   const decision = await requireCheckpointGate().ask({ label, message })
 
   console.log(
     `[agentic-workflow] checkpoint ${label}: ${decision.approved ? "approved" : "rejected"}`,
   )
+
+  emitEvent({ type: "checkpoint.completed", label, approved: decision.approved })
 
   if (!decision.approved) {
     throw new WorkflowCheckpointError(label, decision.reason)

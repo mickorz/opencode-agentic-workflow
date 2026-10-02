@@ -20,6 +20,7 @@ export interface CheckResult {
 }
 
 import { WorkflowError } from "../runtime/errors.js"
+import { emitEvent } from "../observability/events.js"
 
 /** assert 失败时抛出的错误，携带完整 CheckResult 供上层失败策略消费 */
 export class WorkflowCheckError extends WorkflowError {
@@ -53,6 +54,7 @@ export async function check(
   const result: CheckResult = { label, ok }
   if (!ok && detail) result.detail = detail
   console.log(`[agentic-workflow] check ${ok ? "ok" : "FAIL"}: ${label}`)
+  emitEvent({ type: "check.completed", label, ok })
   return result
 }
 
