@@ -22,9 +22,11 @@
 
 import { Plugin } from "@opencode/plugin"
 
+import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
+import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 import { runSmokeWorkflow } from "../workflow/smoke.js"
 
 export default Plugin.define({
@@ -37,6 +39,7 @@ export default Plugin.define({
       model?: ExecutorModelRef
       agent?: string
       concurrency?: number
+      checkpoint?: { mode?: CheckpointPolicy }
     }
 
     const executor = withConcurrencyLimit(
@@ -48,6 +51,10 @@ export default Plugin.define({
       options.concurrency,
     )
     setExecutor(executor)
+
+    // checkpoint 审批门：P1 策略门（auto-approve/auto-reject）；
+    // 交互式 TUI 对话框门（双形态 + RPC）为 P2 计划
+    setCheckpointGate(new PolicyCheckpointGate(options.checkpoint?.mode))
 
     // 递归防护：workflow 运行期间，子会话里的 agent 也可能看到并调用 workflow 工具，
     // 形成递归 workflow；叠加并发信号量后会自饿死死锁（实测卡死）。
