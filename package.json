@@ -6,6 +6,20 @@
   "license": "MIT",
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/plugin/index.js",
+      "types": "./dist/plugin/index.d.ts"
+    },
+    "./tui": {
+      "import": "./dist/plugin/tui.js",
+      "types": "./dist/plugin/tui.d.ts"
+    },
+    "./rpc": {
+      "import": "./dist/plugin/checkpoint-rpc.js",
+      "types": "./dist/plugin/checkpoint-rpc.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -18,7 +32,11 @@
     "@opencode/plugin": "^2.0.22"
   },
   "devDependencies": {
+    "@opencode/theme": "^2.0.22",
+    "@opentui/core": "^0.5.14",
+    "@opentui/solid": "^0.5.14",
     "@types/node": "^26.6.4",
+    "solid-js": "^1.9.9",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

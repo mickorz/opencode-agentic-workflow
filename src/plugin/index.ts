@@ -25,6 +25,10 @@ import { Plugin } from "@opencode/plugin"
 import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
+import {
+  InteractiveCheckpointGate,
+  type InteractiveCheckpointOptions,
+} from "./interactive-checkpoint-gate.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 import { runReliableWorkflow } from "../workflow/reliable.js"
@@ -40,7 +44,7 @@ export default Plugin.define({
       model?: ExecutorModelRef
       agent?: string
       concurrency?: number
-      checkpoint?: { mode?: CheckpointPolicy }
+      checkpoint?: { mode?: CheckpointPolicy | "interactive" } & InteractiveCheckpointOptions
       /** reliable workflow 的 check 步骤命令 */
       checkCommand?: string
     }
@@ -55,9 +59,22 @@ export default Plugin.define({
     )
     setExecutor(executor)
 
-    // checkpoint 审批门：P1 策略门（auto-approve/auto-reject）；
-    // 交互式 TUI 对话框门（双形态 + RPC）为 P2 计划
-    setCheckpointGate(new PolicyCheckpointGate(options.checkpoint?.mode))
+    // checkpoint 审批门：
+    //   auto-approve / auto-reject（默认策略门，headless 友好）
+    //   interactive（P2.3：TUI 双形态 + RPC，真正的人工审批）
+    if (options.checkpoint?.mode === "interactive") {
+      const gate = new InteractiveCheckpointGate(ctx.rpc, {
+        timeoutMs: options.checkpoint.timeoutMs,
+        onTimeout: options.checkpoint.onTimeout,
+      })
+      await gate.bind()
+      setCheckpointGate(gate)
+      console.log(
+        "[agentic-workflow] checkpoint gate: interactive (TUI dialog via RPC)",
+      )
+    } else {
+      setCheckpointGate(new PolicyCheckpointGate(options.checkpoint?.mode))
+    }
 
     // 递归防护：workflow 运行期间，子会话里的 agent 也可能看到并调用 workflow 工具，
     // 形成递归 workflow；叠加并发信号量后会自饿死死锁（实测卡死）。
