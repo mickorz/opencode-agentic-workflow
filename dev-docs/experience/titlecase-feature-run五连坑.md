@@ -125,6 +125,16 @@ checkpoint 步骤失败 = run 失败，approved 状态与按 cleanup 策略的�
 | 4 | journal 手术（commitSha/diffStat，备份在前）+ resume #2 | verify 通过；checkpoint 300s 超时被拒（坑 5） |
 | 5 | 对话中征得用户批准 + resume #3 | checkpoint 再次超时被拒，run 停在 `failed/currentStep=4` |
 
+## 修复落位（feature-development v1.1.0，2026-10-04）
+
+- **坑 1**：check 固化前恢复锁文件噪声（package-lock / shrinkwrap / pnpm / yarn / bun），
+  `keepLockfileChanges` arg 显式保留依赖变更；主仓 lockfile 陈旧远因已同步（0.3.0）
+- **坑 4**：verify 步骤的 `diffStat` / `commitSha` 与 diff **同源现算**，不再引用
+  journal 中 check 步骤的缓存值——外部 amend 等修正后报告仍强一致
+- 单测：默认恢复 / 显式保留 / amend 同源现算 三场景（173/173 绿）
+- 未修：坑 2/3（verify 原语层：artifact 排序与 reviewer JSON 容错）、坑 5
+  （Watching：checkpoint 决定注入通道）、前置坑 0（工具描述约束，待 Watching 信号）
+
 ## 关联与回填
 
 - Watching 回填：坑 5 → 「TUI workflow 运行进度可视化」升至 2 次；失败 run

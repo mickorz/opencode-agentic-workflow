@@ -34,6 +34,12 @@ export interface FeatureDevelopmentArgs {
   checkCommand?: string
   /** reviewer 数量，默认 2 */
   reviewers?: number
+  /**
+   * 保留锁文件变更（默认 false）：check 命令（npm install 等）可能重写
+   * package-lock.json 等锁文件，默认在固化前恢复该噪声（五连坑坑 1）；
+   * 需求本身涉及依赖变更时置 true。
+   */
+  keepLockfileChanges?: boolean
 }
 
 /** 链路累积状态：每步返回 {...prev, 新字段}，journal 逐步落盘（resume 依赖） */
@@ -82,7 +88,7 @@ export function featureDevelopmentWorkflow(hostOptions?: {
 }): WorkflowDefinition<FeatureDevelopmentArgs, { output: string }> {
   return {
     id: "feature-development",
-    version: "1.0.0",
+    version: "1.1.0",
     description:
       "需求分析 -> 隔离 worktree 实现 -> 确定性 check（失败自动修复重试）-> " +
       "reviewer 审查真实 diff -> 人工审批；产物固化为 agw/<runId> 分支 commit。" +
@@ -96,6 +102,10 @@ export function featureDevelopmentWorkflow(hostOptions?: {
           description: "确定性检查命令（在 worktree 根执行，默认 npm install + typecheck + test）",
         },
         reviewers: { type: "integer", description: "reviewer 数量（默认 2）" },
+        keepLockfileChanges: {
+          type: "boolean",
+          description: "保留锁文件变更（默认 false：check 引发的 lockfile 重写会被恢复；需求涉及依赖变更时置 true）",
+        },
       },
       required: ["topic"],
     },
@@ -188,6 +198,16 @@ export function featureDevelopmentWorkflow(hostOptions?: {
                   checkOk = true
                 }
 
+                // 五连坑坑 1 修复：check 命令（npm install 等）可能重写锁文件，
+                // 固化前恢复该噪声；需求本身涉及依赖变更时经 keepLockfileChanges 保留
+                if (!args.keepLockfileChanges) {
+                  await getCommandRunner().run(
+                    "for f in package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lockb; " +
+                      'do git checkout -- "$f" 2>/dev/null || true; done',
+                    { cwd: root },
+                  )
+                }
+
                 // 产物固化为 commit：幂等（无暂存变更时跳过），resume 重跑安全
                 const commitScript =
                   "git add -A && " +
@@ -215,16 +235,23 @@ export function featureDevelopmentWorkflow(hostOptions?: {
               },
 
               // 4. 语义 verify：reviewer 并行审查「真实 diff」（非 agent 自述）
+              //    五连坑坑 4 修复：diffStat/commitSha 与 diff 同源现算，
+              //    不引用 journal 中 check 步骤的缓存值（外部 amend 等修正后仍强一致）
               async (prev) => {
                 const baseSha = prev?.baseSha
                 if (!baseSha) {
                   throw new Error("[feature-development] verify: 缺少 baseSha（analyze 状态丢失）")
                 }
-                const diff = await git(root, `diff ${baseSha}..HEAD`)
+                const [diff, stat, sha] = await Promise.all([
+                  git(root, `diff ${baseSha}..HEAD`),
+                  git(root, `diff --stat ${baseSha}..HEAD`),
+                  git(root, "rev-parse HEAD"),
+                ])
                 const diffText =
                   diff.stdout.length > MAX_DIFF_CHARS
                     ? diff.stdout.slice(0, MAX_DIFF_CHARS) + "\n…(diff 已截断)"
                     : diff.stdout
+                const freshDiffStat = stat.stdout.trim()
                 const artifactText = [
                   `需求：${args.topic}`,
                   "",
@@ -232,7 +259,7 @@ export function featureDevelopmentWorkflow(hostOptions?: {
                   prev?.plan ?? "",
                   "",
                   "## 变更统计",
-                  prev?.diffStat ?? "",
+                  freshDiffStat,
                   "",
                   "## 完整 diff",
                   "```diff",
@@ -247,7 +274,12 @@ export function featureDevelopmentWorkflow(hostOptions?: {
                     "改动与需求相符、实现正确、包含覆盖关键行为的测试、" +
                     "未引入明显缺陷或破坏现有代码",
                 })
-                return { ...prev, verdicts: result.verdicts }
+                return {
+                  ...prev,
+                  diffStat: freshDiffStat,
+                  commitSha: sha.stdout.trim(),
+                  verdicts: result.verdicts,
+                }
               },
 
               // 5. 人工审批：决定实现是否被接受

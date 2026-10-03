@@ -53,13 +53,14 @@ function writeIn(repo: string, rel: string, content: string): void {
   writeFileSync(abs, content)
 }
 
-/** 真实临时 git 仓库（单 commit 初始状态） */
+/** 真实临时 git 仓库（单 commit 初始状态，含被跟踪的 lockfile 以测坑 1） */
 async function makeRepo(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "agw-feature-test-"))
   const runner = new NodeCommandRunner()
   const init = await runner.run(
     "git init -q -b main && git config user.email test@example.com && " +
       "git config user.name test && echo hello > README.md && " +
+      "echo '{\"lockfileVersion\":3,\"packages\":{}}' > package-lock.json && " +
       "git add -A && git commit -qm init",
     { cwd: dir },
   )
@@ -259,4 +260,92 @@ test("feature-development: 状态为 JSON 可序列化（journal 落盘契约）
   assert.equal(round.branch, "main")
   assert.ok(round.commitSha)
   assert.equal(round.verdicts?.length, 2)
+})
+
+test("feature-development: 坑1修复——check 引发的 lockfile 重写默认被恢复，不进交付 commit", async () => {
+  const repo = await makeRepo()
+  const recorder = agentExecutor([
+    () => "实现计划：新增 src/util.ts",
+    () => {
+      writeIn(repo, "src/util.ts", "export const x = 1\n")
+      // 模拟 npm install 重写 lockfile 的噪声
+      writeIn(repo, "package-lock.json", '{"lockfileVersion":3,"packages":{},"noise":"rewritten-by-install"}')
+      return "done\nsrc/util.ts"
+    },
+    () => PASS,
+    () => PASS,
+  ])
+  setExecutor(recorder.executor)
+
+  await featureDevelopmentWorkflow().run(
+    { topic: "需求 L", checkCommand: "true" },
+    fakeCtx(repo),
+  )
+
+  const stat = await new NodeCommandRunner().run("git show --stat --format= HEAD", { cwd: repo })
+  assert.match(stat.stdout, /src\/util\.ts/)
+  assert.doesNotMatch(stat.stdout, /package-lock\.json/)
+  // worktree 中的噪声也已被恢复（不残留脏文件）
+  const dirty = await new NodeCommandRunner().run("git status --porcelain", { cwd: repo })
+  assert.equal(dirty.stdout, "")
+})
+
+test("feature-development: keepLockfileChanges=true——依赖变更场景保留锁文件", async () => {
+  const repo = await makeRepo()
+  const recorder = agentExecutor([
+    () => "实现计划：新增依赖",
+    () => {
+      writeIn(repo, "src/util.ts", "export const x = 1\n")
+      writeIn(repo, "package-lock.json", '{"lockfileVersion":3,"packages":{},"new":"dep"}')
+      return "done"
+    },
+    () => PASS,
+    () => PASS,
+  ])
+  setExecutor(recorder.executor)
+
+  await featureDevelopmentWorkflow().run(
+    { topic: "需求 D", checkCommand: "true", keepLockfileChanges: true },
+    fakeCtx(repo),
+  )
+
+  const stat = await new NodeCommandRunner().run("git show --stat --format= HEAD", { cwd: repo })
+  assert.match(stat.stdout, /package-lock\.json/)
+})
+
+test("feature-development: 坑4修复——外部 amend 后 verify 同源现算，报告指向新 commit", async () => {
+  const repo = await makeRepo()
+  let amendedSha = ""
+  const runSteps: RunStepsFn = async (steps) => {
+    let prev: unknown
+    for (let i = 0; i < steps.length; i++) {
+      prev = await steps[i]!(prev as never)
+      if (i === 2) {
+        // 模拟坑 4：check 落盘后、verify 之前，外部 amend 修正 commit
+        const runner = new NodeCommandRunner()
+        await runner.run("git commit --amend -m 'amended deliverable' -q", { cwd: repo })
+        amendedSha = (await runner.run("git rev-parse HEAD", { cwd: repo })).stdout.trim()
+      }
+    }
+    return prev as FeatureDevState
+  }
+  const recorder = agentExecutor([
+    () => "实现计划",
+    () => {
+      writeIn(repo, "src/util.ts", "export const x = 1\n")
+      return "done"
+    },
+    () => PASS,
+    () => PASS,
+  ])
+  setExecutor(recorder.executor)
+
+  const report = await featureDevelopmentWorkflow().run(
+    { topic: "需求 A", checkCommand: "true", reviewers: 2 },
+    { runId: "t", mode: "start", workspaceRoot: repo, runSteps },
+  )
+
+  assert.ok(amendedSha, "amend 应已执行")
+  // 报告的 commitSha 是 verify 现算的 amend 后新值，而非 journal 缓存的旧值
+  assert.ok(report.output.includes(amendedSha.slice(0, 8)))
 })
