@@ -113,7 +113,79 @@ Decision:
 
 ## Watching（出现过信号，未达阈值）
 
-（暂无真实信号；有 1–2 次出现的需求放这里，防丢趋势）
+> 来源均为真实使用反馈；出现 1–2 次的放这里，防丢趋势（≥3 次独立用户即评估升级 Accepted）。
+
+### Request: Workflow 列表查询命令
+
+Source:
+  用户对话 2026-10-04（Adoption Sprint，TUI 手动验收时）
+
+Frequency:
+  1 次（作者 dogfood；读者侧是否同样卡住待观察）
+
+Evidence:
+  用户在 TUI 问「查看当前 workflow 有哪些」——当前只能让主 agent 读
+  workflow 工具描述间接获得（registry.summarize 内嵌于 description），
+  无第一等的用户命令/工具。
+
+Problem:
+  用户无法直接枚举可用 workflow 及其入参；新会话/新用户 discover 成本高。
+
+Existing capability:
+  工具描述内嵌注册表摘要（主 agent 可转述）；journal/metrics 可查历史。
+
+Current workaround:
+  问主 agent「有哪些可用的 workflow」。
+
+Impact:
+  Adoption 摩擦（A3 看懂核心价值的前置）；不影响已知道 flow id 的用户。
+
+Complexity:
+  S（新增只读 workflow_list 工具或 /flows 命令，registry 已有 summarize）
+
+Success criteria:
+  用户一条指令/一次工具调用即可枚举 flow id、描述与入参 schema；
+  与 registry 注册自动同步，零维护。
+
+Decision:
+  Watching
+
+### Request: 停止/取消运行中的 workflow
+
+Source:
+  用户对话 2026-10-04（Adoption Sprint，TUI 手动验收时）
+
+Frequency:
+  1 次
+
+Evidence:
+  用户问「还有停止 workflow 功能吗」——当前无取消 API，只能杀进程。
+
+Problem:
+  长链路（如 feature-development 的 check/npm install 阶段）无法主动中止；
+  误启动的 run 只能等它跑完或杀掉整个 opencode。
+
+Existing capability:
+  杀进程后 run 停留在 journal 非 completed 状态，resumeRunId 可续跑
+  （completed 前缀跳过）——「中断 + 恢复」有，「主动取消」无。
+
+Current workaround:
+  退出 opencode / 杀 service；run 变为可 resume 状态。
+
+Impact:
+  成本失控风险（跑错的 workflow 继续烧 token）；HITL 体验缺口。
+
+Complexity:
+  M~L（需设计：运行中 agent 任务中止传播、journal 取消态收口与 resume
+  语义、worktree cleanup 决策、workflowDepth 守卫释放）
+
+Success criteria:
+  用户可一条指令取消指定 runId；journal 有显式 cancelled 状态；
+  取消后 workspace 按 cleanup 策略处理且可安全 resume 或归档；
+  metrics/trace 记录取消事件。
+
+Decision:
+  Watching
 
 ---
 
