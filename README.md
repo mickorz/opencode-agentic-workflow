@@ -78,22 +78,13 @@ journal 记录每一步，崩溃后 resume 按精确版本解析定义、跳过�
 
 **前置**：OpenCode V2（`opencode` CLI 可用且有能正常对话的模型）、Node.js 20+、git。
 
-```bash
-# 1. 获取并构建
-git clone https://github.com/mickorz/opencode-agentic-workflow.git
-cd opencode-agentic-workflow
-npm install && npm run build          # 产物在 dist/plugin
-
-# 2. 在你的项目里配置插件（opencode.json）
-#    package 用克隆目录的绝对路径；model 换成你的 providerID/modelId
-```
-
 ```jsonc
-// <你的项目>/opencode.json
+// 1. 在你的项目里配置插件（<你的项目>/opencode.json）
+//    package 用 npm 包名；model 换成你的 providerID/modelId
 {
   "plugins": [
     {
-      "package": "/abs/path/to/opencode-agentic-workflow/dist/plugin",
+      "package": "@mickorz/opencode-agentic-workflow",
       "options": {
         "model": { "providerID": "glm", "id": "glm-5.3-flash" },
         "agent": "build"
@@ -104,7 +95,7 @@ npm install && npm run build          # 产物在 dist/plugin
 ```
 
 ```bash
-# 3. 在项目目录里跑第一个 workflow（3 路并行分析 + 汇总）
+# 2. 在项目目录里跑第一个 workflow（3 路并行分析 + 汇总）
 cd <你的项目>
 opencode run --model glm/glm-5.3-flash \
   "调用 workflow 工具：flow=smoke, topic=Rust 内存安全。完成后报告输出。"
@@ -119,8 +110,23 @@ opencode run --model glm/glm-5.3-flash \
 
 到这里执行链已通。接下来按需打开持久化 / 观测 / 隔离——见下方示例。
 
-> 提示：修改插件代码后需重启 opencode service（插件在服务启动时从 `dist/` 加载）；
-> 验收类长任务请给 `opencode run` 配看门狗超时（见 `dev-docs/experience/`）。
+<details>
+<summary><b>从源码安装（插件开发 / 未发布版本）</b></summary>
+
+```bash
+git clone https://github.com/mickorz/opencode-agentic-workflow.git
+cd opencode-agentic-workflow
+npm install && npm run build          # 产物在 dist/plugin
+```
+
+然后把 opencode.json 的 `package` 换成克隆目录下 `dist/plugin` 的**绝对路径**。
+修改插件代码后需重启 opencode service（服务在启动时加载 dist/；
+插件相对路径以项目目录而非服务 cwd 为基准——见 `dev-docs/experience/`）。
+
+</details>
+
+> 提示：验收类长任务请给 `opencode run` 配看门狗超时
+> （见 `dev-docs/experience/opencode-run-hang-watchdog.md`）。
 
 ---
 
@@ -348,7 +354,7 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 | 隔离 | 子会话 | git worktree per run（resume reattach） |
 | 观测 | TUI 进度树 | events.jsonl trace + metrics/成本聚合 |
 | 人工审批 | checkpoint（V1 API） | 策略门 + TUI 交互式审批（RPC） |
-| 安装 | `npx @mickorz/opencode-dynamic-workflows install` | clone + build + `opencode.json` 指向 `dist/plugin` |
+| 安装 | `npx @mickorz/opencode-dynamic-workflows install` | npm 包 `@mickorz/opencode-agentic-workflow`（或源码路径） |
 
 迁移要点：
 

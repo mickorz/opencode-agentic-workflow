@@ -1,11 +1,38 @@
 {
-  "name": "opencode-agentic-workflow",
+  "name": "@mickorz/opencode-agentic-workflow",
   "version": "0.3.0",
-  "description": "Agentic workflow engine for OpenCode V2: workflow core + V2 adapter",
+  "description": "Durable Agentic Workflow Runtime for OpenCode V2: journal & resume, version registry, tracing, token/cost metrics, git worktree isolation",
   "type": "module",
   "license": "MIT",
+  "author": "mickorz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mickorz/opencode-agentic-workflow.git"
+  },
+  "homepage": "https://github.com/mickorz/opencode-agentic-workflow#readme",
+  "bugs": {
+    "url": "https://github.com/mickorz/opencode-agentic-workflow/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "workflow",
+    "agentic",
+    "multi-agent",
+    "agent-orchestration",
+    "durable",
+    "resume",
+    "worktree",
+    "llm"
+  ],
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "import": "./dist/plugin/index.js",
