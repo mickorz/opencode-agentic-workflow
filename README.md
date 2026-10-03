@@ -137,9 +137,14 @@ npm install && npm run build          # 产物在 dist/plugin
 | `smoke` | research → summary | 3 路并行分析 agent + 1 个汇总 agent（冒烟演示） |
 | `reliable` | execute → check → verify → checkpoint | agent 执行 → 确定性检查 → 多 reviewer 语义评审 → 审批 |
 | `artifact` | write → check → checkpoint | 在隔离 workspace 中生成文件产物并验证（隔离验收载体） |
+| `feature-development` ⭐ | analyze → implement → check → verify → checkpoint | 一句话需求 → 隔离 worktree 实现 → 真实测试 → 失败自动修复 → reviewer 审查真实 diff → 人工审批；产物固化为 `agw/<runId>` 分支 commit（需启用 isolation） |
 
 新增 workflow = 在 `src/workflows/` 写一个 `WorkflowDefinition` 并在
 `src/plugin/index.ts` 注册；工具描述、枚举、路由全部由注册表驱动。
+编写规范与事故教训见 **[Workflow Authoring Best Practices](./docs/workflow-authoring.md)**。
+
+遇到「改了代码不生效」「插件版本不对」「checkpoint 卡 5 分钟」等问题，
+先查 **[Troubleshooting](./docs/troubleshooting.md)**。
 
 ---
 

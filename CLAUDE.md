@@ -6,6 +6,9 @@
 
 `dev-docs/` 是本仓库专门保存开发过程文档的目录（已在 `.gitignore` 中忽略，不进入 git 仓库）。
 
+> 边界：仓库根 `docs/` 是**读者向**文档（Troubleshooting、Authoring Guide 等，
+> 随 npm 包分发、README 链接引用）；`dev-docs/` 只服务开发过程，两者不混放。
+
 ### 规则
 
 1. **所有开发过程文档必须放在 `dev-docs/` 目录下**，不要散落在仓库根目录或其他位置。

@@ -132,8 +132,11 @@ checkpoint 步骤失败 = run 失败，approved 状态与按 cleanup 策略的�
 - **坑 4**：verify 步骤的 `diffStat` / `commitSha` 与 diff **同源现算**，不再引用
   journal 中 check 步骤的缓存值——外部 amend 等修正后报告仍强一致
 - 单测：默认恢复 / 显式保留 / amend 同源现算 三场景（173/173 绿）
-- 未修：坑 2/3（verify 原语层：artifact 排序与 reviewer JSON 容错）、坑 5
-  （Watching：checkpoint 决定注入通道）、前置坑 0（工具描述约束，待 Watching 信号）
+- 未修：坑 2/3（verify 原语层）→ 坑 3 已入 Watching
+  （reviewer JSON 容错）；坑 2（artifact 排序）随首个受害 workflow 泛化时
+  按作者规范处理（docs/workflow-authoring.md）；坑 4 的 systemic 解法已入
+  Watching（journal 快照一致性）；坑 5（checkpoint 决定注入通道）在 Watching；
+  前置坑 0（工具描述约束，待 Watching 信号）
 
 ## 关联与回填
 

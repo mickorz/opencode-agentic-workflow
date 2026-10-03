@@ -263,6 +263,87 @@ Success criteria:
 Decision:
   Watching
 
+### Request: reviewer 输出解析容错（非法 JSON 无单点重试）
+
+Source:
+  titlecase 旗舰首跑 2026-10-04（experience/titlecase-feature-run五连坑.md 坑 3）
+
+Frequency:
+  1 次（作者 dogfood 首跑即触发）
+
+Evidence:
+  verify 首败理由之三：`reviewer output was not valid JSON with
+  verdict/summary`——reviewer agent 输出无强 schema 约束，一次格式跑偏
+  （尾随文字/围栏等）即整体 fail；`assertVerify` 内无针对单 reviewer 的
+  解析重试。
+
+Problem:
+  verify 步骤的结论解析脆弱：上游 analyze/implement/check 成本已沉没，
+  却因一个 reviewer 的格式失误整步作废。
+
+Existing capability:
+  verify 并行多 reviewer + 判决聚合；失败可 resume 重跑 verify
+  （completed 前缀跳过）——但重跑整步而非修复单点。
+
+Current workaround:
+  resume 重跑 verify 步骤（再赌一次格式运气）；或人工检查后接受。
+
+Impact:
+  长链路 workflow 的尾部脆弱性；verify 结论可信度打折（格式错 ≠ 评审否）。
+
+Complexity:
+  S~M（单 reviewer 解析失败局部重试 N 次；或 reviewer prompt 收紧 +
+  输出 JSON mode/结构化抽取）
+
+Success criteria:
+  单 reviewer 输出非法时自动局部重试；重试仍失败才计入 fail 且报错
+  明示「格式错误」与「评审否决」的区别；不影响多 reviewer 聚合语义。
+
+Decision:
+  Watching
+
+### Request: journal 快照与外部变更的一致性（systemic 解法）
+
+Source:
+  titlecase 旗舰首跑 2026-10-04（experience/titlecase-feature-run五连坑.md 坑 4）
+
+Frequency:
+  1 次（外部 amend 救火后 resume，journal 衍生字段与现实脱节）
+
+Evidence:
+  外部 `git commit --amend` 修正交付后 resume：verify 的 diff 现算是干净的，
+  但 journal 缓存的 `diffStat` 仍含 lockfile +365、`commitSha` 指向不存在
+  的 commit——两源矛盾导致 reviewer 合理拒绝。当时靠手工「journal 手术」
+  （改写已完成步骤的 output）才续跑成功。
+
+Problem:
+  resume 只信任 journal 快照，不感知 worktree/git 的外部修正；衍生字段
+  缓存让「已完成的过去」绑架「现在的真相」。
+
+Existing capability:
+  v1.1.0 已落 author 侧缓解：verify 的 diffStat/commitSha 与 diff 同源现算
+  （docs/workflow-authoring.md「派生字段不要跨步骤缓存」）；worktree/分支
+  状态每次现查。
+
+Current workaround:
+  遵循 authoring 规则现算衍生数据；确需外部手术时手改 journal
+  （不可推广，仅作者可用）。
+
+Impact:
+  任何绕过 workflow 的现场修正（人工救火、外部工具）都可能造成 journal
+  与现实分叉；分叉后只有懂内部的人能救。
+
+Complexity:
+  M（候选方向：resume 时对衍生字段做一致性校验并标记失效/重建；
+  或 journal 只存步骤产出、衍生数据一律消费点现算的架构化约定）
+
+Success criteria:
+  外部 amend/手改文件后 resume，不手改 journal 也能正确收口；
+  校验发现分叉时给出明确诊断而非静默错误数据。
+
+Decision:
+  Watching
+
 ---
 
 ## Backlog（尚无真实用户来源，不得排期）
@@ -283,6 +364,19 @@ Decision:
   **当前默认 `git-worktree` 保持不变**
 - 触发条件（任一真实反馈出现才启动）：① worktree 创建/checkout 明显慢；
   ② 单 run 磁盘占用过高；③ Unity/大型 monorepo 项目实际采用
+
+### 自定义 workflow 装载机制（user-defined workflow loading）
+
+- 缺口：npm 包 `exports` 只有插件入口（`.`/`./tui`/`./rpc`），无库形式的
+  authoring API——外部用户今天**无法装载自己写的 workflow**（只能 fork 仓库
+  改 `src/workflows/` + 注册）。这是 Adoption 指标 **A4（用户写自己的
+  workflow，真正的 adoption 拐点）的产品前置**
+- 现状：WorkflowDefinition/primitives 全部在包内但未作为公共 API 导出；
+  `docs/workflow-authoring.md` 已沉淀编写规范（当前仅本仓库贡献者可用）
+- 候选方向：库导出（`/sdk` 子路径）+ 用户定义装载（约定目录/配置注册），
+  版本纪律与 resume 契约沿用现有 registry
+- 触发条件：外部用户表达「想写自己的 workflow」（issue/对话），或
+  Gallery 出现外部贡献——在此之前不预写装载骨架
 
 ### Parallel resume
 
