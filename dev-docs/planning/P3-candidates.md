@@ -160,6 +160,8 @@ Frequency:
 
 Evidence:
   用户问「还有停止 workflow 功能吗」——当前无取消 API，只能杀进程。
+  关联实证：titlecase 首跑三连败各留一个 worktree + 挂牌分支、无回收路径
+  （experience/titlecase-feature-run五连坑.md 坑 4）——失败生命周期管理缺口。
 
 Problem:
   长链路（如 feature-development 的 check/npm install 阶段）无法主动中止；
@@ -193,12 +195,13 @@ Source:
   用户对话 2026-10-04（Adoption Sprint，TUI 手动验收时）
 
 Frequency:
-  1 次
+  2 次（2026-10-04 TUI 询问一次；titlecase 旗舰首跑中亲历黑盒 5+ 分钟——
+  见 experience/titlecase-feature-run五连坑.md 坑 5，Run3 机械链路全通但全程不可见）
 
 Evidence:
-  用户在 TUI 发起 feature-development 后问「阶段/agent 显示是不是没开发」——
-  workflow 工具调用在 TUI 中是不透明的块，phase/步骤/子 agent 活动/verify
-  结论全程不可见，结束才一次性返回报告。
+  用户在 TUI 发起 feature-development 后问「阶段/agent 显示是不是没开发」；
+  随后的三次真实 run 中，workflow 工具调用均为不透明的块，phase/步骤/子
+  agent 活动/verify 结论全程不可见，结束才一次性返回报告。
 
 Problem:
   长链路（5+ 分钟）运行期间用户零反馈，无法判断卡死还是在跑。
