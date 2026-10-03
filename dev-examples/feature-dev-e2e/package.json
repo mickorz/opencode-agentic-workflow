@@ -1,8 +1,0 @@
-{
-  "name": "agw-dev-feature-dev-e2e",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@mickorz/opencode-agentic-workflow": "file:../.."
-  }
-}

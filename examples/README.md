@@ -33,13 +33,13 @@
    | 文件 | 必要性 | 说明 |
    |------|--------|------|
    | `README.md` | 必须 | 演示什么、怎么运行、会看到什么、证据落在哪里、失败怎么办 |
-   | `opencode.json` | 必须 | 可直接运行的插件配置；读者只改 model/prices 即可跑 |
-   | `package.json` | 视需 | 有 npm 依赖时提供；插件用 `file:../..` symlink 到仓库 dist |
-   | `.gitignore` | 视需 | 忽略运行产物（journal/trace/node_modules/*.out） |
+   | `opencode.json` | 必须 | 可直接运行的插件配置；插件引用统一用相对路径 `../../dist/plugin`（需先在仓库根 build）；读者只改 model/prices 即可跑 |
+   | `.gitignore` | 视需 | 忽略运行产物（journal/trace/*.out） |
 
 3. **准入门槛**：只收录**已合入 main 并注册进插件**的 workflow；
    不建空目录占位——条目随真实示例一起提交（纪律见 P3-candidates）。
-4. **可运行性**：从全新 clone 出发可跑通（需要先在仓库根执行
-   `npm install && npm run build` 生成 dist；npm 发布新版后可切换为包名引用）。
+4. **可运行性**：从全新 clone 出发可跑通——仓库根 `npm install && npm run build`
+   后，进入示例目录启动即可；npm 发布新版后示例可切换为包名引用
+   （注意 OpenCode 对包名形式走自身缓存，见 `examples/01-coding-reliable/README.md`）。
 5. **索引同步**：新增/变更示例必须同步更新上面的索引表（含核心能力列）。
 6. **语言与路径**：面向读者的表述；不出现本机绝对路径与开发期临时配置。

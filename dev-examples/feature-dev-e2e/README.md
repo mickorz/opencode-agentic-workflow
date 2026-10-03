@@ -5,9 +5,10 @@ feature-development 的 headless e2e 沙盒（checkpoint=auto-approve，
 
 ```bash
 cd dev-examples/feature-dev-e2e
-npm install        # file:../.. -> symlink 到仓库 dist；重 build 即生效
 opencode run --model glm/glm-5.3-flash "调用 workflow 工具：flow=feature-development, topic=<需求>"
 ```
+
+（插件经 `../../../dist/plugin` 相对路径加载；仓库根重新 build 即生效，无需安装。）
 
 验证点：
 

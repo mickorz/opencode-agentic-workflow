@@ -1,8 +1,0 @@
-{
-  "name": "agw-example-01-coding-reliable",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@mickorz/opencode-agentic-workflow": "file:../.."
-  }
-}
