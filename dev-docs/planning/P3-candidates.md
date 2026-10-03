@@ -266,16 +266,21 @@ Decision:
 ### Request: reviewer 输出解析容错（非法 JSON 无单点重试）
 
 Source:
-  titlecase 旗舰首跑 2026-10-04（experience/titlecase-feature-run五连坑.md 坑 3）
+  titlecase 旗舰首跑 2026-10-04（experience/titlecase-feature-run五连坑.md 坑 3）；
+  v1.1.0 验证跑 2026-10-04（run_1791051494484_5o0phtsh，trace events.jsonl）
 
 Frequency:
-  1 次（作者 dogfood 首跑即触发）
+  2 次（均作者 dogfood，同日两遇）
 
 Evidence:
   verify 首败理由之三：`reviewer output was not valid JSON with
   verdict/summary`——reviewer agent 输出无强 schema 约束，一次格式跑偏
   （尾随文字/围栏等）即整体 fail；`assertVerify` 内无针对单 reviewer 的
   解析重试。
+  第二次为**确定性复现**：v1.1.0 验证跑（kebabCase 需求）reviewer #1 pass、
+  #2 输出非法 JSON；主 agent 自动 resume 重放 verify，#2 仍同样失败
+  （trace：verify.completed×2 passedCount=1/2）。产物本身完好且独立复验
+  通过（tsc + 9/9 单测），仅链路无法收口。
 
 Problem:
   verify 步骤的结论解析脆弱：上游 analyze/implement/check 成本已沉没，
@@ -290,6 +295,8 @@ Current workaround:
 
 Impact:
   长链路 workflow 的尾部脆弱性；verify 结论可信度打折（格式错 ≠ 评审否）。
+  **已实际阻断旗舰链路收口**：两次 dogfood 均出现「产物完好、check 全绿、
+  run 却 failed」——用户视角即「成功被判失败」。
 
 Complexity:
   S~M（单 reviewer 解析失败局部重试 N 次；或 reviewer prompt 收紧 +
