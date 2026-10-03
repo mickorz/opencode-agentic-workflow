@@ -74,6 +74,16 @@
   git branch -D agw/<runId>
   ```
 
+## verify 报 "could not be completed: reviewer returned invalid structured output"
+
+**含义**：reviewer 的输出没解析成 JSON（协议失败），**不是评审否决**——
+产物没有被判不合格，只是这次评审没完成。
+
+**解法**：直接 `resumeRunId="<runId>"` 重试 verify（completed 步骤跳过，
+只重放失败的 verify）。v0.3.1 起解析失败会自动局部重试（默认 2 次），
+此类报错已大幅减少；语义否决（`verify failed: ... (#N: 理由)`）才是真的
+被拒，需要改产物。
+
 ## workflow 中途失败，白跑了吗
 
 没有。journal（配置 `journalDir` 后）记录每步状态与累积 state；失败步骤之后的

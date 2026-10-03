@@ -45,6 +45,14 @@ export type WorkflowEvent = WorkflowEventBase &
         passedCount: number
         totalCount: number
       }
+    | {
+        /** v0.3.1 坑 3：reviewer 协议失败（解析重试耗尽）——非语义否决 */
+        type: "verify.protocol_failed"
+        label: string
+        reviewer: number
+        attempts: number
+        lastRaw: string
+      }
     | { type: "checkpoint.waiting"; label: string; message: string }
     | { type: "checkpoint.completed"; label: string; approved: boolean }
     | { type: "step.started"; index: number }

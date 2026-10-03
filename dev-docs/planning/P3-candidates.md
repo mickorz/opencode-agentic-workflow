@@ -28,6 +28,30 @@ P3 Scope（v0.4.x 立项）
 └─ Declined   明确拒绝并记录原因（防翻烧饼）
 ```
 
+## Blocker Override（v0.3.1 起）
+
+> **Frequency 治理功能需求；Correctness / Adoption Blocker 用 Severity × Reproducibility 治理。**
+> 两类东西不共用准入规则——这不是破例通道，是平行的第二条规则。
+
+```text
+Normal candidate:
+  真实用户反馈达到 Frequency 阈值
+          ↓
+  可进入排期
+
+Correctness / Adoption Blocker（满足条件越多越优先）:
+  1. 可稳定复现（如 2/2 确定性）
+  2. 导致正确产物被判失败（false negative）
+  3. 阻断 Quick Start / Flagship Demo
+  4. 有数据损坏 / 恢复错误风险
+  5. 用户无合理 workaround
+          ↓
+  可提前处理（仍需在条目记录 Blocker 判定依据）
+```
+
+约束：Blocker 修复严格限制在最小范围（S~M 局部改动），禁止借机重构；
+修复合入后在原条目记录修复落位与版本。
+
 ## 候选条目模板
 
 ```text
@@ -307,7 +331,21 @@ Success criteria:
   明示「格式错误」与「评审否决」的区别；不影响多 reviewer 聚合语义。
 
 Decision:
-  Watching
+  Blocker Override（v0.3.1 已修复）
+
+**Blocker 判定（2026-10-04）**：Reproducible ✅（2/2 确定性，含 resume 重放）；
+False negative ✅（产物全绿被判失败）；Flagship blocking ✅（阻断旗舰链路收口，
+外部测试第一批就会撞上）；无合理 workaround ✅（resume 只会重放同样失败的
+verify）。满足 4/5 条件，按 Blocker Override 提前修复。
+
+**修复落位（v0.3.1）**：`src/quality/verify.ts` 三态模型——语义结论
+（pass/fail，**不重试**，禁止「问到同意为止」）/ 解析失败（**仅此类局部重试**，
+默认 attempts=2，修复指令只要求重出格式不重新评审，`reviewerProtocol.attempts`
+可调）/ 重试耗尽抛 `ReviewerProtocolError`（错误信息明确「verification
+could not be completed … protocol failure, NOT a semantic rejection …
+resume to retry verify」，绝不伪装成 `verify failed`）。新增
+`verify.protocol_failed` 事件。单测 5 个新场景（含两个核心验收：
+非法→重试→pass 恢复；重试耗尽→ProtocolError 而非 artifact rejected）。
 
 ### Request: journal 快照与外部变更的一致性（systemic 解法）
 
