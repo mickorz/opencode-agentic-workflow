@@ -50,7 +50,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20"
