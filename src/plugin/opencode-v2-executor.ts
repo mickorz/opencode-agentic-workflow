@@ -74,6 +74,8 @@ export class OpenCodeV2Executor implements AgentExecutor {
       title: `${this.titlePrefix}#${this.counter}`,
       model: this.model,
       agent: this.agent,
+      // P2.7 隔离：子会话 cwd 绑定到 workflow workspace（worktree 根）
+      ...(task.cwd ? { location: { directory: task.cwd } } : {}),
     })
 
     const sessionID = created.id

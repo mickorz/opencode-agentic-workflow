@@ -25,4 +25,5 @@ export {
   resumeWorkflow,
   startWorkflow,
   type WorkflowRunResult,
+  type WorkspaceBinding,
 } from "./runner.js"

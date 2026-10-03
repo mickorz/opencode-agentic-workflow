@@ -20,6 +20,13 @@ import type { WorkflowIdentity } from "../state/journal.js"
 import { RunJournal } from "../state/recorder.js"
 import type { ExecutionStore } from "../state/store.js"
 import {
+  setCurrentWorkspace,
+  type CleanupPolicy,
+  type WorkspaceHandle,
+  type WorkspaceOptions,
+  type WorkspaceProvider,
+} from "../workspace/index.js"
+import {
   resumeSequence,
   sequence,
   type SequenceOptions,
@@ -52,6 +59,7 @@ function createContext(input: {
   mode: "start" | "resume"
   journal?: RunJournal
   store?: ExecutionStore
+  workspaceRoot?: string
 }): WorkflowContext {
   return {
     runId: input.runId,
@@ -59,6 +67,8 @@ function createContext(input: {
     // resume 模式的 journal 由 resumeSequence 内部管理（attach/reopen/收口），
     // ctx 不直接暴露，避免双写
     journal: input.mode === "start" ? input.journal : undefined,
+    // P2.7：隔离工作区根目录（未启用隔离时为 undefined）
+    workspaceRoot: input.workspaceRoot,
     runSteps(steps, options) {
       if (input.mode === "resume" && input.store) {
         return resumeSequence(input.store, input.runId, steps, options as SequenceOptions)
@@ -117,13 +127,48 @@ async function settleAfterFailure(
   }
 }
 
+/** 隔离绑定：provider + 创建参数 + 清理策略（start/resume 均可传） */
+export interface WorkspaceBinding {
+  provider: WorkspaceProvider
+  options?: WorkspaceOptions
+  /** 缺省 "on-success"（成功清理；失败保留现场便于 debug/resume） */
+  cleanup?: CleanupPolicy
+}
+
+/**
+ * 按策略清理 workspace；清理后清除 journal 中的 workspace 身份
+ * （否则已清理的 run 在幂等 resume 时会 attach 一个已删除的目录）。
+ * 清理失败只记录——观测/基础设施不能成为主链路故障源。
+ */
+async function cleanupWorkspace(
+  store: ExecutionStore,
+  runId: string,
+  handle: WorkspaceHandle | undefined,
+  policy: CleanupPolicy,
+  success: boolean,
+): Promise<void> {
+  if (!handle) return
+  if (policy === "never") return
+  if (policy === "on-success" && !success) return
+  try {
+    await handle.dispose({ force: true })
+    const journal = await RunJournal.attach(store, runId)
+    await journal?.clearWorkspace()
+  } catch (error) {
+    console.log(
+      `[agentic-workflow] workspace cleanup failed for ${runId}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
 /** 启动新 run（默认最新版本；可用 options.version 精确指定） */
 export async function startWorkflow(
   registry: WorkflowRegistry,
   store: ExecutionStore,
   id: string,
   args: unknown,
-  options?: { version?: string },
+  options?: { version?: string; workspace?: WorkspaceBinding },
 ): Promise<WorkflowRunResult> {
   const definition = registry.resolve(id, options?.version)
   const problems = validateArgs(definition.argsSchema, args)
@@ -139,20 +184,40 @@ export async function startWorkflow(
     stepCount: definition.stepNames?.length ?? 0,
   })
   const runId = journal.run.runId
+  const cleanupPolicy = options?.workspace?.cleanup ?? "on-success"
 
+  let workspace: WorkspaceHandle | undefined
   try {
-    const result = await definition.run(
-      args as never,
-      createContext({ runId, mode: "start", journal }),
-    )
-    if (journal.run.status === "running") {
-      await journal.complete()
+    // P2.7：创建隔离工作区并把身份落 journal（resume attach 依据）
+    if (options?.workspace) {
+      workspace = await options.workspace.provider.create(
+        runId,
+        options.workspace.options,
+      )
+      await journal.setWorkspace(workspace.identity)
     }
-    return { runId, workflow: identity, output: toOutput(result) }
+    setCurrentWorkspace(workspace)
+    try {
+      const result = await definition.run(
+        args as never,
+        createContext({ runId, mode: "start", journal, workspaceRoot: workspace?.root }),
+      )
+      // 顺序纪律：先收口 journal 再清理 workspace——cleanupWorkspace 会经
+      // attach 重读持久化状态并清除 workspace 字段，若 complete() 在其后，
+      // 内存 journal 会把已删除的 worktree 身份复活写回（幂等 resume 即坏）
+      if (journal.run.status === "running") {
+        await journal.complete()
+      }
+      await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
+      return { runId, workflow: identity, output: toOutput(result) }
+    } finally {
+      setCurrentWorkspace(undefined)
+    }
   } catch (error) {
     if (journal.run.status === "running") {
       await journal.fail(error)
     }
+    await cleanupWorkspace(store, runId, workspace, cleanupPolicy, false)
     throw new WorkflowExecutionError({ runId, ...identity }, error)
   }
 }
@@ -161,12 +226,15 @@ export async function startWorkflow(
  * 从 journal 恢复 run：
  *   - workflow {id, version} 来自 journal，registry 精确版本解析（找不到即报错并列版本）
  *   - args 取 journal 记录（无需调用方重新提供）
+ *   - journal 记录了 workspace 身份时，**重新附着原工作区**（绝不重建——
+ *     durable resume = journal 状态 + 文件系统状态同时恢复；缺失即报错）
  *   - 已完成的 run 幂等重放（不执行任何步骤，仅重建最终报告）
  */
 export async function resumeWorkflow(
   registry: WorkflowRegistry,
   store: ExecutionStore,
   runId: string,
+  options?: { workspace?: WorkspaceBinding },
 ): Promise<WorkflowRunResult> {
   const run = await store.getRun(runId)
   if (!run) {
@@ -174,16 +242,30 @@ export async function resumeWorkflow(
   }
   const identity = run.workflow
   const definition = registry.resolve(identity.id, identity.version)
+  const cleanupPolicy = options?.workspace?.cleanup ?? "on-success"
 
+  let workspace: WorkspaceHandle | undefined
   try {
-    const result = await definition.run(
-      run.args as never,
-      createContext({ runId, mode: "resume", store }),
-    )
-    await settleAfterSuccess(store, runId)
-    return { runId, workflow: identity, output: toOutput(result) }
+    if (options?.workspace && run.workspace) {
+      workspace = await options.workspace.provider.attach(run.workspace)
+    }
+    setCurrentWorkspace(workspace)
+    try {
+      const result = await definition.run(
+        run.args as never,
+        createContext({ runId, mode: "resume", store, workspaceRoot: workspace?.root }),
+      )
+      // 同 start：先收口 journal（settle），再清理 workspace（clearWorkspace
+      // 允许在收口后执行——幂等 resume 依赖清理后字段被清掉）
+      await settleAfterSuccess(store, runId)
+      await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
+      return { runId, workflow: identity, output: toOutput(result) }
+    } finally {
+      setCurrentWorkspace(undefined)
+    }
   } catch (error) {
     await settleAfterFailure(store, runId, error)
+    await cleanupWorkspace(store, runId, workspace, cleanupPolicy, false)
     throw new WorkflowExecutionError({ runId, ...identity }, error)
   }
 }

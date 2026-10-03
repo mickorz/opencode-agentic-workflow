@@ -35,6 +35,8 @@ import { FileExecutionStore } from "../state/file-store.js"
 import type { ExecutionStore } from "../state/store.js"
 import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
+import { artifactWorkflow } from "../workflows/artifact.js"
+import { GitWorktreeProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
   type InteractiveCheckpointOptions,
@@ -66,6 +68,20 @@ export default Plugin.define({
        * 价目缓存缺新模型时用它补（如 glm-5.3-flash 未进本地 models-dev 缓存）。
        */
       prices?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+      /**
+       * P2.7 workspace 隔离（默认 off）：
+       *   { "mode": "git-worktree", "dir"?: "...", "baseRef"?: "...", "cleanup"?: "always" | "on-success" | "never" }
+       * mode=git-worktree 时每个 run 创建独立 worktree（子 agent cwd 绑定到其根），
+       * resume 重新附着原 worktree；cleanup 缺省 on-success（失败保留现场）。
+       */
+      isolation?: {
+        mode?: "off" | "git-worktree"
+        /** worktree 父目录（绝对或相对项目目录；缺省 <repo 同级>/<项目名>-worktrees） */
+        dir?: string
+        /** 基准 ref（缺省仓库当前 HEAD） */
+        baseRef?: string
+        cleanup?: CleanupPolicy
+      }
     }
 
     // P2.6 成本估算兜底：宿主价目表（ctx.model.list，USD/M tokens）。
@@ -151,6 +167,7 @@ export default Plugin.define({
     const registry = new WorkflowRegistry()
       .register(smokeWorkflow())
       .register(reliableWorkflow({ checkCommand: options.checkCommand }))
+      .register(artifactWorkflow())
 
     // P2.5 durable journal：配置 journalDir 后，run 经 startWorkflow/resumeWorkflow
     // 走持久化链路（journal 记录 workflow {id, version} + args + steps，可恢复）
@@ -161,6 +178,26 @@ export default Plugin.define({
         : path.join(ctx.location.directory, options.journalDir)
       store = new FileExecutionStore(journalDir)
       console.log(`[agentic-workflow] journal store: ${journalDir}`)
+    }
+
+    // P2.7 workspace 隔离：GitWorktreeProvider（startDir = 项目目录，
+    // 内部解析到 git 仓库根；worktree 落在仓库同级目录，不污染仓库）
+    let workspaceBinding: { provider: WorkspaceProvider; options?: { baseRef?: string }; cleanup?: CleanupPolicy } | undefined
+    if (options.isolation?.mode === "git-worktree") {
+      const dir = options.isolation.dir
+        ? path.isAbsolute(options.isolation.dir)
+          ? options.isolation.dir
+          : path.join(ctx.location.directory, options.isolation.dir)
+        : undefined
+      workspaceBinding = {
+        provider: new GitWorktreeProvider({ startDir: ctx.location.directory, dir }),
+        ...(options.isolation.baseRef ? { options: { baseRef: options.isolation.baseRef } } : {}),
+        cleanup: options.isolation.cleanup,
+      }
+      console.log(
+        `[agentic-workflow] workspace isolation: git-worktree ` +
+          `(cleanup=${options.isolation.cleanup ?? "on-success"}${dir ? `, dir=${dir}` : ""})`,
+      )
     }
 
     // 递归防护：workflow 运行期间，子会话里的 agent 也可能看到并调用 workflow 工具，
@@ -221,7 +258,9 @@ export default Plugin.define({
                     "[agentic-workflow] resume requires the journalDir plugin option to be configured",
                 }
               }
-              const resumed = await resumeWorkflow(registry, store, parsed.resumeRunId)
+              const resumed = await resumeWorkflow(registry, store, parsed.resumeRunId, {
+                workspace: workspaceBinding,
+              })
               return {
                 output:
                   `[resumed ${resumed.workflow.id}@${resumed.workflow.version} ` +
@@ -237,7 +276,7 @@ export default Plugin.define({
             if (store) {
               const started = await startWorkflow(registry, store, workflowId, {
                 topic: parsed.topic,
-              })
+              }, { workspace: workspaceBinding })
               return {
                 output:
                   `[${started.workflow.id}@${started.workflow.version} ` +

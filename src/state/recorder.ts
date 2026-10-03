@@ -21,6 +21,7 @@ import {
   type WorkflowRun,
 } from "./journal.js"
 import type { ExecutionStore } from "./store.js"
+import type { WorkspaceIdentity } from "../workspace/provider.js"
 
 export interface JournalStartInput {
   workflow: WorkflowIdentity
@@ -111,6 +112,27 @@ export class RunJournal {
     for (const step of this.run.steps) {
       if (step.status === "pending") step.status = "skipped"
     }
+    await this.store.saveRun(this.run)
+  }
+
+  /**
+   * 记录 workspace 身份（P2.7 隔离启用时，resume attach 的依据）。
+   * 仅限 run 进行中（收口后不可再写）。
+   */
+  async setWorkspace(identity: WorkspaceIdentity): Promise<void> {
+    this.assertOpen()
+    this.run.workspace = identity
+    await this.store.saveRun(this.run)
+  }
+
+  /**
+   * 清除 workspace 身份（清理完成后调用）。
+   * 维护性操作：允许在 run 收口后执行——否则已清理的 run
+   * 在幂等 resume 时会试图 attach 一个已删除的 worktree。
+   */
+  async clearWorkspace(): Promise<void> {
+    if (this.run.workspace === undefined) return
+    this.run.workspace = undefined
     await this.store.saveRun(this.run)
   }
 

@@ -35,6 +35,11 @@ export interface WorkflowContext {
   mode: "start" | "resume"
   /** journal（配置了 ExecutionStore 时存在；definition 应传给 runSteps） */
   journal?: RunJournal
+  /**
+   * 隔离工作区根目录（P2.7；启用隔离且已创建/附着时存在）。
+   * 子 agent 的 cwd 会自动绑定到这里；文件产物应写到该目录下。
+   */
+  workspaceRoot?: string
   /** 编排步骤的统一入口（自动处理 start/resume 与 journal 记录） */
   runSteps<T>(steps: Array<StepFn<T>>, options?: RunStepsOptions): Promise<T | undefined>
 }

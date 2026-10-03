@@ -11,6 +11,11 @@
 export interface AgentTask {
   /** 发给子 agent 的提示词 */
   prompt: string
+  /**
+   * 子 agent 的工作目录（P2.7 隔离）：启用 workspace 时为 worktree 根，
+   * executor 应将其绑定为子会话 cwd；未启用时不传。
+   */
+  cwd?: string
 }
 
 /** token 用量（结构对齐宿主 API 的 usage 形状，但为 Core 自有类型） */

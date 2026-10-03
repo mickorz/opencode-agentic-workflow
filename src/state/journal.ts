@@ -16,6 +16,8 @@
  * 需要被 resume 消费的值应保持 JSON-safe，如 AgentResult { output: string }）。
  */
 
+import type { WorkspaceIdentity } from "../workspace/provider.js"
+
 export type RunStatus = "running" | "completed" | "failed" | "aborted"
 
 export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped"
@@ -31,9 +33,7 @@ export interface WorkflowIdentity {
   id: string
   /** 语义化版本（与 WorkflowDefinition.version 一致） */
   version: string
-}
-
-export interface StepRecord {
+}export interface StepRecord {
   /** 步骤序号（0 起，对应 sequence 下标） */
   index: number
   /** 步骤名（可选，便于定位） */
@@ -62,6 +62,12 @@ export interface WorkflowRun {
   completedAt?: number
   /** 执行参数（重建执行所需的最小上下文，如 topic；由 argsSchema 声明契约） */
   args?: unknown
+  /**
+   * 隔离工作区身份（P2.7）：resume 必须附着原 workspace——
+   * durable resume = journal 状态 + 文件系统状态同时恢复。
+   * 清理完成后置 undefined（见 RunJournal.clearWorkspace）。
+   */
+  workspace?: WorkspaceIdentity
   /** 失败/中断原因（run 级别） */
   failure?: StepErrorRecord
   steps: StepRecord[]

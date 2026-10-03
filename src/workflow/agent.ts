@@ -8,12 +8,17 @@
 import type { AgentResult } from "../runtime/executor.js"
 import { requireExecutor } from "../runtime/engine.js"
 import { emitEvent, preview } from "../observability/events.js"
+import { currentWorkspace } from "../workspace/ambient.js"
 
 export async function agent(prompt: string): Promise<AgentResult> {
+  const workspace = currentWorkspace()
   emitEvent({ type: "agent.started", promptPreview: preview(prompt) })
   const startedAt = Date.now()
   try {
-    const result = await requireExecutor().execute({ prompt })
+    const result = await requireExecutor().execute({
+      prompt,
+      ...(workspace ? { cwd: workspace.root } : {}),
+    })
     emitEvent({
       type: "agent.completed",
       durationMs: Date.now() - startedAt,
