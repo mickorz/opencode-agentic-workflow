@@ -30,6 +30,14 @@
 5. 文档统一使用 Markdown 格式，文件名应能体现内容，例如 `2026-10-03-workflow-design.md`。
 6. **自动归类，无需询问**：发现 `dev-docs/` 根目录下有未归类的文档时，直接按内容判断类型并移动到对应子文件夹，不要向用户确认。
 
+## opencode run 测试约定
+
+1. **并发上限：最多同时运行 2 个 `opencode run` 用例**。需要更多用例时排队分批跑。
+2. 验收类长任务前先预热检查模型可用：`opencode run --model glm/glm-5.3-flash "只回复 ok"`。
+3. 每个 run 必须配看门狗：记录直连 PID，超时 `pkill -P $pid` + `kill $pid`；agent 链（feature-development 等）预算 ≥20 分钟，短 flow 5–8 分钟。
+4. 证据优先级：journal + traceDir 文件 > stdout（stdout 可能截断或乱码，验收以落盘证据为准）。
+5. 完整配方见 `dev-docs/experience/opencode-run-hang-watchdog.md`。
+
 ## 示例目录：`examples/` 与 `dev-examples/`
 
 两个示例目录面向不同受众，严格分流。
