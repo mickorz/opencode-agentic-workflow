@@ -1,13 +1,31 @@
-# P3 Candidates（反馈驱动，不预设功能）
+# P3 Candidates（正式治理规则：证据驱动，不预设功能）
 
-> 纪律：P3 不从「我觉得有用」出发，只从真实反馈出发。
-> 每个候选必须有 Source（issue/discussion/用户对话）与 Frequency；
-> 没有来源的条目只能停留在 Backlog 区，不得排期。
+> **进入 P3 的条件不是"时间到了"，而是至少一批候选跨过了本文定义的真实需求阈值。**
+> 没有 Source 和 Frequency 的条目只能留在 Backlog，不得排期。
 
-## 流程
+## 流程（v0.4.x 启动的 gate）
 
 ```text
-用户反馈 → 归类 → 出现频率 → 现有能力能否解决 → 是否属于 Runtime → P3 Candidate
+v0.3.0 Release & Adoption
+        ↓
+Feedback Collection（issues / discussions / npm / 用户对话）
+        ↓
+P3-candidates.md（本文件）
+        ↓
+Evidence + Frequency 达标
+        ↓
+Accepted Candidate
+        ↓
+P3 Scope（v0.4.x 立项）
+```
+
+## 文件结构
+
+```text
+├─ Accepted   已跨过阈值，进入排期
+├─ Watching   出现过 1–2 次，未达触发阈值（趋势观察，防止丢信号）
+├─ Backlog    内部已知缺口，无真实用户来源，不得排期
+└─ Declined   明确拒绝并记录原因（防翻烧饼）
 ```
 
 ## 候选条目模板
@@ -21,8 +39,14 @@ Source:
 Frequency:
   N 个独立用户/场景
 
+Evidence:
+  用户原话 / issue 摘要 / 复现链接
+
 Problem:
   <用户面对的真实问题，不是我们想象的功能缺口>
+
+Existing capability:
+  当前 runtime 哪些能力已能部分解决
 
 Current workaround:
   <用户现在怎么绕过>
@@ -33,9 +57,63 @@ Impact:
 Complexity:
   <S/M/L 估计>
 
+Success criteria:
+  <做完后怎么判断这个需求真的解决了（可验证）>
+
 Decision:
-  Pending / Accepted(v0.4.x) / Declined(原因) / Deferred
+  Accepted(v0.4.x) / Watching / Pending / Declined(原因)
 ```
+
+### 填写示例（⚠️ 数据虚构，仅演示格式，勿当真实反馈引用）
+
+```text
+## Request: Parallel resume
+
+Source:
+  GitHub issue #42
+  用户对话 2026-10-12
+
+Frequency:
+  4 个独立用户
+
+Evidence:
+  用户的 parallel workflow 运行 40 分钟后单分支失败，
+  当前必须整体重跑。
+
+Problem:
+  parallel workflow 无法只恢复失败分支。
+
+Existing capability:
+  sequence resume 已支持 completed prefix 跳过，
+  但 parallel 无 branch-level journal identity。
+
+Current workaround:
+  拆成多个 sequence workflow，或整体重跑。
+
+Impact:
+  长耗时 workflow 成本高，失败恢复时间长。
+
+Complexity:
+  L
+
+Success criteria:
+  parallel 中已完成 branch 不重新执行；
+  失败 branch 可跨进程恢复；
+  journal 能准确记录 branch 状态。
+
+Decision:
+  Pending
+```
+
+---
+
+## Accepted（已跨阈值，进入排期）
+
+（暂无——这是刻意的：v0.3.0 刚发布，反馈通道刚建立）
+
+## Watching（出现过信号，未达阈值）
+
+（暂无真实信号；有 1–2 次出现的需求放这里，防丢趋势）
 
 ---
 
