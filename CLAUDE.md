@@ -27,6 +27,33 @@
 5. 文档统一使用 Markdown 格式，文件名应能体现内容，例如 `2026-10-03-workflow-design.md`。
 6. **自动归类，无需询问**：发现 `dev-docs/` 根目录下有未归类的文档时，直接按内容判断类型并移动到对应子文件夹，不要向用户确认。
 
+## 示例目录：`examples/` 与 `dev-examples/`
+
+两个示例目录面向不同受众，严格分流。
+
+### `examples/` —— 面向读者的 Workflow Gallery
+
+1. **定位**：读者第一接触面，回答「这个项目能拿来干嘛」；每个条目必须独立跑通、自解释。
+2. **命名**：`NN-slug/`（两位序号 + kebab-case），序号即学习路线顺序，递增分配、不复用。
+3. **必备文件**：`README.md`（演示什么/怎么运行/会看到什么/证据位置/失败怎么办）与
+   `opencode.json`（可直接运行，读者只改 model/prices）；需要 npm 依赖时加 `package.json`
+   （插件用 `file:../..` symlink 到仓库 dist）；运行产物用 `.gitignore` 忽略。
+4. **准入门槛**：只收录**已合入 main 并注册进插件**的 workflow；不建空目录占位，
+   条目随真实示例一起提交。
+5. **索引同步**：新增/变更示例必须同步更新 `examples/README.md` 的索引表。
+   详细规范以 `examples/README.md` 为准。
+
+### `dev-examples/` —— 开发期沙盒
+
+1. **定位**：存放开发中的 workflow 脚本试验、插件联调配置与临时输出；**不对读者负责**，
+   内容可随时失效或删除，不进 README 宣传、不被其他文档引用。
+2. **约定**：一个开发主题一个子目录（kebab-case）；运行产物一律 gitignore 不提交；
+   不维护索引。联调配置统一用 `file:../..`（symlink 到仓库 dist，重 build 即生效）。
+3. **毕业路径**：dev-examples 验证通过 → 定义合入 `src/workflows/` 并在插件注册 →
+   `examples/` 落地正式条目 → 删除 dev-examples 里的对应目录。
+4. **分流纪律**：开发中的内容一律先放 `dev-examples/`，验证毕业后再进 `examples/`；
+   反过来（把半成品放进 examples/）视为违规。
+
 ## 进度文件夹：`dev-docs/progress/`
 
 `dev-docs/progress/` 专门用于记录项目阶段性执行进度。

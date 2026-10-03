@@ -1,7 +1,7 @@
 # Workflow Gallery
 
-> 一组可运行示例，回答「opencode-agentic-workflow 到底能拿来干嘛」。
-> 每个示例目录自带 `opencode.json`，`cd` 进去、装好依赖、重启 OpenCode 即可运行。
+> 一组**面向读者**的可运行示例，回答「opencode-agentic-workflow 到底能拿来干嘛」。
+> 每个示例目录自带 `opencode.json`，装好依赖、在本目录启动 OpenCode 即可运行。
 
 ## 学习路线
 
@@ -21,13 +21,25 @@
 | 04 | human-checkpoint（规划） | 深度交互审批/驳回/改写循环 | interactive checkpoint |
 | 05 | observability（规划） | metrics/trace 查询与成本核算 | observability |
 
-## 运行方式（以 01 为例）
+## 示例规范（examples/ 目录约定）
 
-```bash
-cd examples/01-coding-reliable
-npm install          # 首次；file: 链接是指向仓库根的 symlink，重新 build 即自动生效
-# 重启 OpenCode（在本目录启动），插件自动加载
-```
+> 本目录是**读者第一接触面**：每个条目都必须能独立跑通、自解释。
+> 开发中的试验品放 `dev-examples/`，不要放这里（见根目录 CLAUDE.md）。
 
-> 02+ 未落地前不要创建空目录占位——Gallery 条目随实际示例一起提交
-> （纪律见 `dev-docs/planning/P3-candidates.md`：Gallery/Hub 不预设）。
+1. **命名**：`NN-slug/`——两位序号 + kebab-case 主题（如 `01-coding-reliable/`）。
+   序号即学习路线顺序，新建示例递增分配，不复用已删条目的序号。
+2. **每个示例必备文件**：
+
+   | 文件 | 必要性 | 说明 |
+   |------|--------|------|
+   | `README.md` | 必须 | 演示什么、怎么运行、会看到什么、证据落在哪里、失败怎么办 |
+   | `opencode.json` | 必须 | 可直接运行的插件配置；读者只改 model/prices 即可跑 |
+   | `package.json` | 视需 | 有 npm 依赖时提供；插件用 `file:../..` symlink 到仓库 dist |
+   | `.gitignore` | 视需 | 忽略运行产物（journal/trace/node_modules/*.out） |
+
+3. **准入门槛**：只收录**已合入 main 并注册进插件**的 workflow；
+   不建空目录占位——条目随真实示例一起提交（纪律见 P3-candidates）。
+4. **可运行性**：从全新 clone 出发可跑通（需要先在仓库根执行
+   `npm install && npm run build` 生成 dist；npm 发布新版后可切换为包名引用）。
+5. **索引同步**：新增/变更示例必须同步更新上面的索引表（含核心能力列）。
+6. **语言与路径**：面向读者的表述；不出现本机绝对路径与开发期临时配置。

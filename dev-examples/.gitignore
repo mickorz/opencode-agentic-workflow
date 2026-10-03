@@ -1,0 +1,6 @@
+node_modules/
+.agw/
+journal/
+trace/
+*.out
+target/
