@@ -270,6 +270,20 @@ Decision:
 以下均为**内部设计时已知的能力缺口**，仅作记录——在拿到真实用户反馈前，
 它们不构成 P3 排期依据：
 
+### Large repository workspace strategy（大仓库隔离策略）
+
+- 缺口：超大 repo（Unity/游戏/monorepo）下 full worktree 的工作树 checkout、
+  依赖安装与缓存（`Library/`、`node_modules/`、build cache）成本过高
+- 方案（完整设计见 `dev-docs/design/大仓库Workspace隔离策略.md`）：
+  `sparse-worktree`（worktree + sparse-checkout）、`shared` 只读共享
+  （分析/审查类 workflow 不建 worktree，可演进为步骤级策略）、
+  `off`、缓存分离层（Git 文件隔离 + 缓存共享，CI 同构）、Workspace Scope
+  （scope 同时约束 sparse checkout / agent cwd / search / RAG / 权限）
+- 现状：`WorkspaceProvider` 抽象已支持扩展（Core 零改动，仅一种实现）；
+  **当前默认 `git-worktree` 保持不变**
+- 触发条件（任一真实反馈出现才启动）：① worktree 创建/checkout 明显慢；
+  ② 单 run 磁盘占用过高；③ Unity/大型 monorepo 项目实际采用
+
 ### Parallel resume
 
 - 缺口：resume 目前仅支持 `sequence()`；parallel 步骤崩溃后无法部分恢复
