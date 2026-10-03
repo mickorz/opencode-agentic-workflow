@@ -37,14 +37,15 @@ jobs:
       packages: write   # GitHub Packages 镜像发布用（GITHUB_TOKEN 自动生成，无需配 secret）
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      # ⚠️ 必须 setup-node@v7：v7 起才移除占位 NODE_AUTH_TOKEN=XXXXX-… 注入
+      # （actions/setup-node#1440）。低于 v7 时 npm 误以为已有凭证而跳过 OIDC
+      # trusted-publisher 交换 → E404/ENEEDAUTH（日志里的 npm notice
+      # "tokens that bypass 2FA..." 即走错了 classic-token 路径的标志）。
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-          # registry-url 按 npm 官方 trusted-publishing 模板保留；
-          # 占位 token 问题（NODE_AUTH_TOKEN=XXXXX-…，v5 会导出、#1440 已在 v6 修复）
-          # 由下方「清除占位 token」保险丝步骤兜底
           registry-url: https://registry.npmjs.org
           package-manager-cache: false   # 防 npm 缓存投毒暴露 OIDC token（官方建议）
 
@@ -67,15 +68,6 @@ jobs:
       # dist/ 已 gitignore，publish 前必须显式构建（files: ["dist"]）
       - run: npm run build
 
-      # 保险丝：setup-node 若仍导出占位 token（v5 行为，#1440），清空之——
-      # 否则 npm 以为已有凭证而跳过 OIDC trusted-publisher 交换，假 token → E404
-      - name: 清除占位 auth token（保障 OIDC 路径）
-        run: |
-          if [ "${NODE_AUTH_TOKEN:-}" = "XXXXX-XXXXX-XXXXX-XXXXX" ]; then
-            echo "NODE_AUTH_TOKEN=" >> "$GITHUB_ENV"
-            echo "placeholder NODE_AUTH_TOKEN cleared"
-          fi
-
       - name: 发布到 npm（OIDC，无需 token）
         run: npm publish --access public
 
@@ -85,7 +77,7 @@ jobs:
       # 故 continue-on-error：镜像失败不阻塞主发布（npmjs 已成功即可），失败在 Actions 摘要里可见。
       # 顺序固定 npmjs 先行：若镜像失败后重跑整个流水线，npm 步骤会因版本已存在而拦下，不会双发。
       - name: 切换 registry 到 GitHub Packages
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://npm.pkg.github.com
