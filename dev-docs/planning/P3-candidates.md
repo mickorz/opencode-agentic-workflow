@@ -187,6 +187,43 @@ Success criteria:
 Decision:
   Watching
 
+### Request: TUI workflow 运行进度可视化
+
+Source:
+  用户对话 2026-10-04（Adoption Sprint，TUI 手动验收时）
+
+Frequency:
+  1 次
+
+Evidence:
+  用户在 TUI 发起 feature-development 后问「阶段/agent 显示是不是没开发」——
+  workflow 工具调用在 TUI 中是不透明的块，phase/步骤/子 agent 活动/verify
+  结论全程不可见，结束才一次性返回报告。
+
+Problem:
+  长链路（5+ 分钟）运行期间用户零反馈，无法判断卡死还是在跑。
+
+Existing capability:
+  事件流完整（step/agent/phase/verify 事件经 emitEvent 产生，落 trace jsonl
+  与 metrics）；server→TUI 事件通道已由 checkpoint 验证（emit + 订阅 + RPC）。
+
+Current workaround:
+  另开终端 tail trace events.jsonl；或等工具调用结束读报告。
+
+Impact:
+  Demo/Adoption 杀伤力大：黑盒感直接削弱「可观测」卖点；用户可能中途误杀。
+
+Complexity:
+  M（转发既有事件到 TUI 总线 + TUI 侧渲染；渲染可用的 TUI API 面需调研——
+  目前只验证过 dialog.confirm）
+
+Success criteria:
+  workflow 运行中 TUI 实时显示：当前步骤（stepNames 完成态）、活跃子 agent、
+  check/verify 结论；不阻塞工具调用；事件与 trace jsonl 同源零维护。
+
+Decision:
+  Watching
+
 ---
 
 ## Backlog（尚无真实用户来源，不得排期）
