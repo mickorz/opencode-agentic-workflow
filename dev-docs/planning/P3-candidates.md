@@ -227,6 +227,42 @@ Success criteria:
 Decision:
   Watching
 
+### Request: checkpoint 决定注入通道（headless/对话场景）
+
+Source:
+  用户对话 2026-10-04（titlecase 旗舰首跑，experience/titlecase-feature-run五连坑.md 坑 5）
+
+Frequency:
+  1 个场景（2 回合超时重试）：用户在对话中明确批准，resume 仍两次 300s 超时被拒
+
+Evidence:
+  run `cp2tz6hy` 终态 failed/currentStep=4；产物完好（分支 `a6f9b11`）但
+  approved 状态与 cleanup 未执行——InteractiveCheckpointGate 只认 TUI RPC
+  应答，对话/编程式批准无通道注入。
+
+Problem:
+  interactive 模式下经 workflow 工具编程式调用时，人工审批语义完成却无法
+  收口 run。
+
+Existing capability:
+  PolicyCheckpointGate（auto-approve）可绕过但放弃人工闸门；超时 reject 保安全。
+
+Current workaround:
+  切 auto-approve 后 resume（丢人工语义）；或 journal 手术（不可推广）。
+
+Impact:
+  HITL 卖点在 headless/对话场景不可用；已完成实现被人工门卡死无法完成 run。
+
+Complexity:
+  M（journal 落 pending decision 或 CLI/工具回复 requestId 的通道设计）
+
+Success criteria:
+  用户在对话/CLI 表达的决定可送达挂起中的 gate；run 正常收口；
+  通道有超时与幂等保护；不破坏 TUI 弹窗既有路径。
+
+Decision:
+  Watching
+
 ---
 
 ## Backlog（尚无真实用户来源，不得排期）
