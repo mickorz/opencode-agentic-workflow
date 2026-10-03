@@ -27,6 +27,7 @@ import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { createFileTraceSink } from "../observability/trace.js"
+import { MetricsCollector, formatMetrics } from "../metrics/collector.js"
 import { WorkflowRegistry } from "../registry/registry.js"
 import { startWorkflow, resumeWorkflow, runWorkflowInline } from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
@@ -39,6 +40,7 @@ import {
   type InteractiveCheckpointOptions,
 } from "./interactive-checkpoint-gate.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
+import { buildPriceTable, estimateCostUSD } from "./price-table.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 
 export default Plugin.define({
@@ -58,6 +60,44 @@ export default Plugin.define({
       traceDir?: string
       /** journal 落盘目录（<runId>.json，durable/resume 用；不配置则不持久化） */
       journalDir?: string
+      /**
+       * 模型价格覆盖（P2.6 cost 估算）：key = "providerID/modelId"，
+       * 单位 USD/百万 token。优先级：本选项 > ctx.model.list 价目 > 宿主消息 cost。
+       * 价目缓存缺新模型时用它补（如 glm-5.3-flash 未进本地 models-dev 缓存）。
+       */
+      prices?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+    }
+
+    // P2.6 成本估算兜底：宿主价目表（ctx.model.list，USD/M tokens）。
+    // 宿主消息未带精确 cost（或记账为 0）时按 token 用量估算。
+    let priceTable = buildPriceTable((await ctx.model.list()).data)
+    const wantedModel = options.model
+      ? `${options.model.providerID}/${options.model.id}`
+      : undefined
+    if (wantedModel && !priceTable.has(wantedModel)) {
+      // 价目缓存缺目标模型（实测：本地 models-dev 缓存可能滞后于线上）：
+      // 尝试重同步一次，失败则保持原表（成本退回宿主上报值）
+      try {
+        await ctx.model.reload()
+        priceTable = buildPriceTable((await ctx.model.list()).data)
+      } catch {
+        /* 保持原表 */
+      }
+    }
+    // 用户价格覆盖（最高优先）
+    if (options.prices) {
+      for (const [model, price] of Object.entries(options.prices)) {
+        priceTable.set(model, price)
+      }
+    }
+    if (wantedModel) {
+      const price = priceTable.get(wantedModel)
+      console.log(
+        `[agentic-workflow] price table: ${priceTable.size} models` +
+          (price
+            ? `; ${wantedModel}: in $${price.input}/M out $${price.output}/M cache r $${price.cacheRead}/M`
+            : `; ${wantedModel}: no pricing (cost will be host-reported only)`),
+      )
     }
 
     const executor = withConcurrencyLimit(
@@ -65,6 +105,7 @@ export default Plugin.define({
         session: ctx.session,
         model: options.model,
         agent: options.agent,
+        estimateCost: (model, usage) => estimateCostUSD(priceTable, model, usage),
       }),
       options.concurrency,
     )
@@ -87,6 +128,9 @@ export default Plugin.define({
       setCheckpointGate(new PolicyCheckpointGate(options.checkpoint?.mode))
     }
 
+    // P2.6 metrics collector：纯事件总线消费者（token/cost/时长/计数聚合）
+    const metrics = new MetricsCollector()
+
     // observability（P2.4）：可选 JSONL 事件 trace 落盘
     // 注意：相对路径以项目目录（ctx.location.directory）为基准——
     // 插件运行在 opencode service 进程内，其 cwd 不是项目目录
@@ -97,6 +141,9 @@ export default Plugin.define({
       const traceFile = path.join(traceDir, "events.jsonl")
       createFileTraceSink(traceFile)
       console.log(`[agentic-workflow] event trace sink: ${traceFile}`)
+
+      // P2.6 metrics：workflow 结束时把聚合快照落盘（查询/取证用，写失败只记录）
+      metrics.subscribeFileSink(path.join(traceDir, "metrics.json"))
     }
 
     // P2.5 workflow registry：新增 workflow = 新增定义 + 在此注册，
@@ -217,6 +264,37 @@ export default Plugin.define({
           } finally {
             workflowDepth -= 1
           }
+        },
+      })
+
+      // P2.6 metrics 查询工具：读取聚合快照（纯只读，不执行任何 workflow）
+      editor.add({
+        name: "workflow_metrics",
+        description:
+          "Query cumulative execution metrics of agentic workflows in this service: " +
+          "agent calls, token usage (input/output/reasoning/cache), cost in USD, " +
+          "per-model breakdown, workflow durations and quality-gate counters " +
+          "(check/verify/checkpoint). Read-only; call after running workflows to report cost & usage.",
+        input: {
+          type: "object",
+          properties: {
+            format: {
+              type: "string",
+              enum: ["text", "json"],
+              description: "Output format, default text",
+            },
+          },
+        } as Record<string, unknown>,
+        output: {
+          type: "string",
+        } as Record<string, unknown>,
+        async execute(input: unknown) {
+          const parsed = (input as { format?: unknown }) ?? {}
+          const format = parsed.format === "json" ? "json" : "text"
+          const snapshot = metrics.snapshot()
+          const output =
+            format === "json" ? JSON.stringify(snapshot, null, 2) : formatMetrics(snapshot)
+          return { output }
         },
       })
     })

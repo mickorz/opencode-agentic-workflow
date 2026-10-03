@@ -18,6 +18,9 @@ export async function agent(prompt: string): Promise<AgentResult> {
       type: "agent.completed",
       durationMs: Date.now() - startedAt,
       outputLength: result.output.length,
+      usage: result.usage,
+      costUSD: result.costUSD,
+      model: result.model,
     })
     return result
   } catch (error) {

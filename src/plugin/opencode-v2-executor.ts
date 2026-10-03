@@ -15,7 +15,7 @@
 
 import type { Plugin } from "@opencode/plugin"
 
-import type { AgentExecutor, AgentResult, AgentTask } from "../runtime/executor.js"
+import type { AgentExecutor, AgentResult, AgentTask, TokenUsage } from "../runtime/executor.js"
 
 /** plugin context 的 session 域类型（避免在多处直接依赖 @opencode/plugin） */
 export type SessionDomain = Plugin.Context["session"]
@@ -41,6 +41,11 @@ export interface OpenCodeV2ExecutorOptions {
   model?: ExecutorModelRef
   /** 子会话使用的 OpenCode agent 名（如 build / explore / plan） */
   agent?: string
+  /**
+   * 成本估算兜底（P2.6 metrics）：宿主消息未带 cost 时，
+   * 由宿主价目表（ctx.model.list）按 token 用量估算 USD。
+   */
+  estimateCost?: (model: string, usage: TokenUsage) => number | undefined
 }
 
 export class OpenCodeV2Executor implements AgentExecutor {
@@ -49,6 +54,7 @@ export class OpenCodeV2Executor implements AgentExecutor {
   private readonly titlePrefix: string
   private readonly model?: ExecutorModelRef
   private readonly agent?: string
+  private readonly estimateCost?: (model: string, usage: TokenUsage) => number | undefined
   private counter = 0
 
   constructor(options: OpenCodeV2ExecutorOptions) {
@@ -57,6 +63,7 @@ export class OpenCodeV2Executor implements AgentExecutor {
     this.titlePrefix = options.titlePrefix ?? "workflow"
     this.model = options.model
     this.agent = options.agent
+    this.estimateCost = options.estimateCost
   }
 
   async execute(task: AgentTask): Promise<AgentResult> {
@@ -91,7 +98,29 @@ export class OpenCodeV2Executor implements AgentExecutor {
           .join("\n")
           .trim()
         if (output.length > 0) {
-          return { output }
+          // token 用量 / 成本 / 模型（V2 assistant 消息自带；P2.6 metrics 消费）
+          const usage = message.tokens && {
+            input: message.tokens.input,
+            output: message.tokens.output,
+            reasoning: message.tokens.reasoning,
+            cache: {
+              read: message.tokens.cache.read,
+              write: message.tokens.cache.write,
+            },
+          }
+          const model = message.model && `${message.model.providerID}/${message.model.id}`
+          return {
+            output,
+            usage,
+            // 成本优先级：宿主正值（精确）> 价目表估算（宿主 0/缺失时兜底——
+            // 实测部分 provider 宿主记账为 0 但 models.dev 有实价）> 宿主原值
+            costUSD:
+              message.cost && message.cost > 0
+                ? message.cost
+                : (usage && model ? this.estimateCost?.(model, usage) : undefined) ??
+                  message.cost,
+            model,
+          }
         }
         // assistant 存在但无文本：带出底层错误信息（如 provider 限流），便于排查
         const detail = message.error

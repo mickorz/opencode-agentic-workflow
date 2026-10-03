@@ -91,3 +91,60 @@ test("executor: throws when session has no assistant text", async () => {
     /failed: assistant message has no text parts/,
   )
 })
+
+test("executor: 提取 assistant 消息的 usage/model；宿主 cost 正值优先", async () => {
+  const fake = makeFakeSession([
+    {
+      type: "assistant",
+      content: [{ type: "text", text: "结果" }],
+      tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 0 } },
+      cost: 0.5,
+      model: { providerID: "glm", id: "flash" },
+    } as never,
+  ])
+  const executor = new OpenCodeV2Executor({
+    session: fake.session as never,
+    estimateCost: () => 0.001,
+  })
+  const result = await executor.execute({ prompt: "p" })
+  assert.equal(result.usage?.input, 100)
+  assert.equal(result.usage?.cache.read, 10)
+  assert.equal(result.model, "glm/flash")
+  assert.equal(result.costUSD, 0.5, "宿主正值优先于估算")
+})
+
+test("executor: 宿主 cost 为 0/缺失时走价目估算兜底", async () => {
+  const base = {
+    type: "assistant",
+    content: [{ type: "text", text: "结果" }],
+    tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    model: { providerID: "glm", id: "flash" },
+  }
+  let estimateCalls: Array<[string, unknown]> = []
+
+  // cost: 0（宿主记账为 0 但实价非零的实测场景）
+  const fakeZero = makeFakeSession([{ ...base, cost: 0 } as never])
+  const execZero = new OpenCodeV2Executor({
+    session: fakeZero.session as never,
+    estimateCost: (model, usage) => {
+      estimateCalls.push([model, usage])
+      return 0.00123
+    },
+  })
+  const zero = await execZero.execute({ prompt: "p" })
+  assert.equal(zero.costUSD, 0.00123, "宿主 0 -> 估算")
+  assert.equal(estimateCalls.length, 1)
+  assert.equal(estimateCalls[0]?.[0], "glm/flash")
+
+  // cost 缺失 + 无估算器 -> 保留宿主 undefined
+  const fakeMissing = makeFakeSession([base as never])
+  const execMissing = new OpenCodeV2Executor({ session: fakeMissing.session as never })
+  const missing = await execMissing.execute({ prompt: "p" })
+  assert.equal(missing.costUSD, undefined)
+
+  // 宿主正值 + 无估算器 -> 宿主值
+  const fakePositive = makeFakeSession([{ ...base, cost: 2 } as never])
+  const execPositive = new OpenCodeV2Executor({ session: fakePositive.session as never })
+  const positive = await execPositive.execute({ prompt: "p" })
+  assert.equal(positive.costUSD, 2)
+})

@@ -11,6 +11,8 @@
  *   - 全局默认 bus 可替换（setEventBus），测试/宿主可注入自己的 bus
  */
 
+import type { TokenUsage } from "../runtime/executor.js"
+
 export interface WorkflowEventBase {
   /** epoch ms */
   time: number
@@ -23,7 +25,17 @@ export type WorkflowEvent = WorkflowEventBase &
     | { type: "workflow.failed"; workflowId: string; error: string }
     | { type: "phase.started"; name: string }
     | { type: "agent.started"; promptPreview: string }
-    | { type: "agent.completed"; durationMs: number; outputLength: number }
+    | {
+        type: "agent.completed"
+        durationMs: number
+        outputLength: number
+        /** token 用量（宿主能提供时；metrics 消费） */
+        usage?: TokenUsage
+        /** 美元成本（宿主直接给出时） */
+        costUSD?: number
+        /** 实际使用的模型 "providerID/id" */
+        model?: string
+      }
     | { type: "agent.failed"; durationMs: number; error: string }
     | { type: "check.completed"; label: string; ok: boolean }
     | {

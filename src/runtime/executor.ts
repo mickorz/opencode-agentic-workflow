@@ -13,9 +13,24 @@ export interface AgentTask {
   prompt: string
 }
 
+/** token 用量（结构对齐宿主 API 的 usage 形状，但为 Core 自有类型） */
+export interface TokenUsage {
+  input: number
+  output: number
+  reasoning: number
+  /** 思维链 token 已含在 output 中时为 0 */
+  cache: { read: number; write: number }
+}
+
 export interface AgentResult {
   /** 子 agent 的最终文本输出 */
   output: string
+  /** token 用量（宿主能提供时；如 OpenCode V2 的 assistant 消息 tokens 字段） */
+  usage?: TokenUsage
+  /** 本次调用的美元成本（宿主直接给出时；如 V2 的 cost 字段） */
+  costUSD?: number
+  /** 实际使用的模型 "providerID/id"（宿主能提供时） */
+  model?: string
 }
 
 export interface AgentExecutor {
