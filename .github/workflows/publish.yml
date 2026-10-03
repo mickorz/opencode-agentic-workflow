@@ -42,7 +42,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          # ⚠️ 不能配 registry-url：setup-node 会写 .npmrc 并导出占位符
+          # NODE_AUTH_TOKEN=XXXXX-XXXXX-XXXXX-XXXXX（actions/setup-node#1440），
+          # npm 误以为已有凭证而跳过 OIDC trusted-publisher 交换 → E404。
+          # 不配 registry-url 时 npm 走默认 registry 并以无 token 状态触发 OIDC。
           package-manager-cache: false   # 防 npm 缓存投毒暴露 OIDC token（官方建议）
 
       - run: npm ci
