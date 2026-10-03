@@ -43,12 +43,27 @@ node_modules（包括 file: symlink）**完全不参与**包名形式的解析�
 ## 解决方案
 
 - **开发期 / 未发布能力**：`"package"` 改用**相对路径**形式，如
-  `"../../dist/plugin"`（相对项目目录解析，已实测可用：探针配置成功路由到
-  feature-development 并触发 isolation 守卫）。仓库重新 build 即生效。
+  `"../../dist/plugin"`（实测：在项目目录启动 opencode 时正确解析，探针配置
+  成功路由到 feature-development 并触发 isolation 守卫）。
+  ⚠️ 注意同族坑 `experience/插件相对路径以-server-cwd-解析.md`：本实测场景
+  service cwd == 项目目录，两种基准不可区分；若 service cwd 与项目目录不一致
+  （如复用别处启动的 service），相对路径行为未验证——稳妥做法是在项目目录
+  启动 opencode。仓库重新 build 即生效。
 - **发布后**：examples 切回包名引用即可（读者拿到的 registry 版本含对应能力）。
 - **缓存刷新**：`rm -rf ~/.cache/opencode/npm/@<scope>`，下次启动重新按
   registry 解析（删除时若有 opencode 服务在跑可能因并发写入报
   "Directory not empty"，重试即可）。
+
+## 关联（插件环境假设三兄弟）
+
+1. `experience/插件相对路径以-server-cwd-解析.md`——插件代码内相对路径按
+   service cwd 解析（traceDir/journalDir 需显式 join ctx.location.directory）
+2. `experience/local-plugin-dist-需-service-restart.md`——dist 改动需重启
+   service 才重新加载
+3. 本篇——npm 包名形式按 registry 版本经自身缓存安装，本机 dist/node_modules
+   改动对其无效
+
+共同心法：**插件 ≠ 你眼前的 shell；cwd、代码版本、依赖来源，三样都要单独验证。**
 
 ## 预防 / 注意事项
 
