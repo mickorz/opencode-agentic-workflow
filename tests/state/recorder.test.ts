@@ -25,7 +25,7 @@ test.beforeEach(() => {
 
 test("生命周期: 每个状态变更落盘后立即可读", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "reliable",
+    workflow: { id: "reliable", version: "1.0.0" },
     args: { topic: "T" },
     stepNames: ["agent", "check", "verify"],
     stepCount: 3,
@@ -67,7 +67,7 @@ test("生命周期: 每个状态变更落盘后立即可读", async () => {
 
 test("fail: 记录失败原因，剩余 pending 步骤标记 skipped", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "reliable",
+    workflow: { id: "reliable", version: "1.0.0" },
     stepNames: ["agent", "check", "verify"],
     stepCount: 3,
   })
@@ -97,28 +97,28 @@ test("fail: 记录失败原因，剩余 pending 步骤标记 skipped", async () 
 })
 
 test("journal 关闭后（complete/fail）拒绝再变更", async () => {
-  const completed = await RunJournal.start(store, { workflowId: "w", stepCount: 1 })
+  const completed = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 1 })
   await completed.stepStarted(0)
   await completed.stepCompleted(0)
   await completed.complete()
   await assert.rejects(() => completed.stepStarted(0), /journal closed/)
   await assert.rejects(() => completed.fail(new Error("x")), /journal closed/)
 
-  const failed = await RunJournal.start(store, { workflowId: "w", stepCount: 1 })
+  const failed = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 1 })
   await failed.fail(new Error("x"))
   await assert.rejects(() => failed.stepStarted(0), /journal closed/)
   await assert.rejects(() => failed.complete(), /journal closed/)
 })
 
 test("步骤序号越界抛错", async () => {
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 2 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 2 })
   await assert.rejects(() => journal.stepStarted(2), /out of range/)
   await assert.rejects(() => journal.stepStarted(-1), /out of range/)
 })
 
 test("attach: 附加到已有 run / 不存在返回 undefined", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "reliable",
+    workflow: { id: "reliable", version: "1.0.0" },
     stepNames: ["a", "b"],
     stepCount: 2,
   })
@@ -144,7 +144,7 @@ test("attach: 附加到已有 run / 不存在返回 undefined", async () => {
 
 test("显式 runId 透传（便于测试与外部引用）", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "w",
+    workflow: { id: "w", version: "1.0.0" },
     stepCount: 1,
     runId: "run_fixed_id",
   })

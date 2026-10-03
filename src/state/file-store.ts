@@ -137,7 +137,7 @@ export class FileExecutionStore implements ExecutionStore {
       const file = path.join(this.baseDir, entry)
       try {
         const run = JSON.parse(await fs.readFile(file, "utf8")) as WorkflowRun
-        if (workflowId && run.workflowId !== workflowId) continue
+        if (workflowId && run.workflow?.id !== workflowId) continue
         runs.push(run)
       } catch {
         console.log(`[agentic-workflow] skipping corrupt run file: ${file}`)

@@ -1,12 +1,12 @@
 /**
- * Workflow Journal 模型（P2.1）
+ * Workflow Journal 模型（P2.1，P2.5 升级版本身份）
  *
  * 一个 WorkflowRun 是某次 workflow 执行的持久化描述，是 P2 后续
  * resume（P2.2）、trace（P2.4）、TUI（P2.3）、registry（P2.5）的共同基础。
  *
- * 形状（与 P2 规划一致）：
+ * 形状：
  *   WorkflowRun
- *   ├─ runId / workflowId
+ *   ├─ runId / workflow { id, version }   ← P2.5：版本身份（安全 resume 的依据）
  *   ├─ status / currentStep
  *   ├─ startedAt / completedAt
  *   └─ steps[] { input, output, status, error, timestamps }
@@ -24,6 +24,13 @@ export interface StepErrorRecord {
   /** 错误名（如 WorkflowCheckError） */
   name: string
   message: string
+}
+
+/** workflow 版本身份：resume 必须经 registry 解析到精确版本，绝不隐式取最新 */
+export interface WorkflowIdentity {
+  id: string
+  /** 语义化版本（与 WorkflowDefinition.version 一致） */
+  version: string
 }
 
 export interface StepRecord {
@@ -45,15 +52,16 @@ export interface StepRecord {
 export interface WorkflowRun {
   /** 全局唯一 run 标识（run_<time>_<rand>） */
   runId: string
-  /** workflow 标识（如 "reliable"、"smoke"） */
-  workflowId: string
+  /** workflow 版本身份（P2.5：安全 resume 依据，见 registry.resolve） */
+  workflow: WorkflowIdentity
   status: RunStatus
   /** 当前/最后尝试的步骤序号；未开始为 -1 */
   currentStep: number
+  /** epoch ms（排序与耗时计算用） */
   startedAt: number
   completedAt?: number
-  /** 执行参数（重建执行所需的最小上下文，如 topic） */
-  args?: Record<string, unknown>
+  /** 执行参数（重建执行所需的最小上下文，如 topic；由 argsSchema 声明契约） */
+  args?: unknown
   /** 失败/中断原因（run 级别） */
   failure?: StepErrorRecord
   steps: StepRecord[]
@@ -81,17 +89,23 @@ export function toErrorRecord(error: unknown): StepErrorRecord {
 /** 创建初始 run（全部步骤 pending） */
 export function createRun(input: {
   runId?: string
-  workflowId: string
-  args?: Record<string, unknown>
+  workflow: WorkflowIdentity
+  args?: unknown
   stepNames?: string[]
   stepCount: number
 }): WorkflowRun {
   if (!Number.isInteger(input.stepCount) || input.stepCount < 0) {
     throw new Error(`stepCount must be a non-negative integer, got ${input.stepCount}`)
   }
+  if (!input.workflow.id || typeof input.workflow.id !== "string") {
+    throw new Error("workflow.id must be a non-empty string")
+  }
+  if (!input.workflow.version || typeof input.workflow.version !== "string") {
+    throw new Error("workflow.version must be a non-empty string")
+  }
   return {
     runId: input.runId ?? generateRunId(),
-    workflowId: input.workflowId,
+    workflow: input.workflow,
     status: "running",
     currentStep: -1,
     startedAt: Date.now(),

@@ -20,6 +20,6 @@ export interface ExecutionStore {
   saveRun(run: WorkflowRun): Promise<void>
   /** 读取 run；不存在返回 undefined */
   getRun(runId: string): Promise<WorkflowRun | undefined>
-  /** 列出 runs；可选按 workflowId 过滤，按 startedAt 倒序 */
+  /** 列出 runs；可选按 workflow id 过滤（不区分版本），按 startedAt 倒序 */
   listRuns(workflowId?: string): Promise<WorkflowRun[]>
 }

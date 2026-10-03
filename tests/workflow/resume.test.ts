@@ -27,7 +27,7 @@ test.beforeEach(() => {
 
 test("journal 写侧: 全部成功 -> run completed，逐步 output 落盘", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "w",
+    workflow: { id: "w", version: "1.0.0" },
     stepNames: ["s1", "s2"],
     stepCount: 2,
   })
@@ -52,7 +52,7 @@ test("journal 写侧: 全部成功 -> run completed，逐步 output 落盘", asy
 
 test("journal 写侧: 失败 -> run failed + failure 记录 + 后续步骤 skipped", async () => {
   const journal = await RunJournal.start(store, {
-    workflowId: "w",
+    workflow: { id: "w", version: "1.0.0" },
     stepNames: ["ok", "boom", "never"],
     stepCount: 3,
   })
@@ -79,7 +79,7 @@ test("journal 写侧: 失败 -> run failed + failure 记录 + 后续步骤 skipp
 })
 
 test("journal 写侧: continue 模式失败累积后统一收口", async () => {
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 3 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 3 })
   await assert.rejects(
     () =>
       sequence<string>(
@@ -106,7 +106,7 @@ test("journal 写侧: continue 模式失败累积后统一收口", async () => {
 test("resume: 失败的 run 恢复 -> completed 前缀跳过，从失败步骤重跑", async () => {
   // 第一次执行：step2 失败
   const journal = await RunJournal.start(store, {
-    workflowId: "reliable",
+    workflow: { id: "reliable", version: "1.0.0" },
     stepNames: ["s1", "s2", "s3"],
     stepCount: 3,
   })
@@ -160,7 +160,7 @@ test("resume: 失败的 run 恢复 -> completed 前缀跳过，从失败步骤�
 test("resume: 崩溃中断（步骤 running）-> 从该步骤重跑", async () => {
   // 手工模拟：step0 完成、step1 刚 started 进程就崩溃（run 仍是 running）
   const journal = await RunJournal.start(store, {
-    workflowId: "w",
+    workflow: { id: "w", version: "1.0.0" },
     stepCount: 2,
   })
   await journal.stepStarted(0)
@@ -188,7 +188,7 @@ test("resume: 崩溃中断（步骤 running）-> 从该步骤重跑", async () =
 })
 
 test("resume: 已完成的 run 幂等返回最后输出，不执行任何步骤", async () => {
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 2 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 2 })
   await sequence<string>([async () => "a", async (p) => `${p}-b`], { journal })
 
   const executed: number[] = []
@@ -207,7 +207,7 @@ test("resume: 已完成的 run 幂等返回最后输出，不执行任何步骤"
 })
 
 test("resume: prev 链来自 journal 输出（含对象值）", async () => {
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 2 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 2 })
   await assert.rejects(
     () =>
       sequence<{ output: string }>([
@@ -236,7 +236,7 @@ test("resume: run 不存在 / 步骤数不匹配 -> 明确抛错", async () => {
     /run not found/,
   )
 
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 3 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 3 })
   await journal.fail(new Error("x"))
   await assert.rejects(
     () => resumeSequence(store, journal.run.runId, [async () => "a", async () => "b"]),
@@ -245,14 +245,14 @@ test("resume: run 不存在 / 步骤数不匹配 -> 明确抛错", async () => {
 })
 
 test("reopen: completed run 拒绝 reopen；failed run 重置未完成步骤", async () => {
-  const completed = await RunJournal.start(store, { workflowId: "w", stepCount: 1 })
+  const completed = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 1 })
   await completed.stepStarted(0)
   await completed.stepCompleted(0)
   await completed.complete()
   await assert.rejects(() => completed.reopen(), /cannot reopen completed/)
 
   const failed = await RunJournal.start(store, {
-    workflowId: "w",
+    workflow: { id: "w", version: "1.0.0" },
     stepNames: ["a", "b", "c"],
     stepCount: 3,
   })
@@ -276,7 +276,7 @@ test("reopen: completed run 拒绝 reopen；failed run 重置未完成步骤", a
 })
 
 test("journal 步骤数与 steps 不一致 -> sequence 直接抛错", async () => {
-  const journal = await RunJournal.start(store, { workflowId: "w", stepCount: 3 })
+  const journal = await RunJournal.start(store, { workflow: { id: "w", version: "1.0.0" }, stepCount: 3 })
   await assert.rejects(
     () => sequence<string>([async () => "a"], { journal }),
     /step count mismatch/,

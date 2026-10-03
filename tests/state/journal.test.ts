@@ -14,7 +14,7 @@ import {
 
 test("createRun: 初始形状（running / currentStep=-1 / steps 全 pending）", () => {
   const run = createRun({
-    workflowId: "reliable",
+    workflow: { id: "reliable", version: "1.0.0" },
     args: { topic: "登录" },
     stepNames: ["agent", "check", "verify", "checkpoint"],
     stepCount: 4,
@@ -33,10 +33,10 @@ test("createRun: 初始形状（running / currentStep=-1 / steps 全 pending）"
 })
 
 test("createRun: stepCount 校验（负数/小数抛错）", () => {
-  assert.throws(() => createRun({ workflowId: "w", stepCount: -1 }), /non-negative integer/)
-  assert.throws(() => createRun({ workflowId: "w", stepCount: 1.5 }), /non-negative integer/)
+  assert.throws(() => createRun({ workflow: { id: "w", version: "1.0.0" }, stepCount: -1 }), /non-negative integer/)
+  assert.throws(() => createRun({ workflow: { id: "w", version: "1.0.0" }, stepCount: 1.5 }), /non-negative integer/)
   // 0 合法（空 sequence）
-  const run = createRun({ workflowId: "w", stepCount: 0 })
+  const run = createRun({ workflow: { id: "w", version: "1.0.0" }, stepCount: 0 })
   assert.deepEqual(run.steps, [])
 })
 

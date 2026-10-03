@@ -9,6 +9,8 @@
  *     -> Session A / B / C（并行）
  *     -> Summary Agent
  *     -> Result -> Main Session
+ *
+ * P2.5：步骤化（research -> summary）+ 可注入 runSteps，可被 journal 记录与 resume。
  */
 
 import { agent } from "./agent.js"
@@ -16,26 +18,39 @@ import { parallel } from "./parallel.js"
 import { phase } from "./phase.js"
 import type { AgentResult } from "../runtime/executor.js"
 import { observeWorkflow } from "../observability/observe.js"
+import { sequence, type RunStepsFn } from "./sequence.js"
 
-export async function runSmokeWorkflow(topic: string): Promise<AgentResult> {
+export async function runSmokeWorkflow(
+  topic: string,
+  runSteps?: RunStepsFn,
+): Promise<AgentResult> {
+  const run: RunStepsFn =
+    runSteps ?? ((steps, options) => sequence(steps, options))
+
   return observeWorkflow(
     "smoke",
     async () => {
       phase("Research")
 
-      const results = await parallel([
-        () => agent(`针对主题「${topic}」，从架构设计角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
-        () => agent(`针对主题「${topic}」，从风险与约束角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
-        () => agent(`针对主题「${topic}」，从实施步骤角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
-      ])
+      const result = (await run<unknown>(
+        [
+          async () =>
+            parallel([
+              () => agent(`针对主题「${topic}」，从架构设计角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
+              () => agent(`针对主题「${topic}」，从风险与约束角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
+              () => agent(`针对主题「${topic}」，从实施步骤角度进行分析，给出要点。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具。`),
+            ]),
+          async (prev) => {
+            phase("Summary")
+            return agent(
+              `根据下面三份分析结果生成一份总结（保留关键要点，去除重复）。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具：\n\n${JSON.stringify(prev, null, 2)}`,
+            )
+          },
+        ],
+        { stepNames: ["research", "summary"] },
+      )) as AgentResult
 
-      phase("Summary")
-
-      return agent(
-        `根据下面三份分析结果生成一份总结（保留关键要点，去除重复）。直接用你自己的知识回答，禁止调用 workflow 或其他任何工具：
-
-${JSON.stringify(results, null, 2)}`,
-      )
+      return result
     },
     { topic },
   )

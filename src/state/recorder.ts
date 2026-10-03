@@ -14,13 +14,18 @@
  * status=aborted 预留给中断场景（交互拒绝/人工打断，P2.3+）。
  */
 
-import { createRun, toErrorRecord, type WorkflowRun } from "./journal.js"
+import {
+  createRun,
+  toErrorRecord,
+  type WorkflowIdentity,
+  type WorkflowRun,
+} from "./journal.js"
 import type { ExecutionStore } from "./store.js"
 
 export interface JournalStartInput {
-  workflowId: string
+  workflow: WorkflowIdentity
   /** 执行参数（重建执行所需的最小上下文） */
-  args?: Record<string, unknown>
+  args?: unknown
   /** 步骤名（可选） */
   stepNames?: string[]
   stepCount: number

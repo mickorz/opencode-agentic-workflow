@@ -46,3 +46,37 @@ wait $pid; rc=$?; kill $wd 2>/dev/null; echo "exit=$rc"
 
 - `exit=143` 且零输出 = 看门狗击杀，不要重跑，先查 API 定位卡点。
 - 任何「会创建子会话/长任务」的验收都必须带超时；重跑前先确认上次失败根因。
+
+## 2026-10-03 补充：看门狗杀不干净 + 极端模型延迟
+
+**坑 1：子壳 PID 模式杀不掉 opencode 本体。**
+`(opencode run ... | tail -N) & pid=$!` 里 `$pid` 是子壳，`kill $pid`
+只杀子壳，opencode 进程变孤儿继续跑（实测又跑了 15+ 分钟，还把 journal 写完了）。
+同时 `tail` 抓着管道，`wait` 表现不稳定，可能拖到外层超时。
+
+正确姿势——**直接 PID + 输出落文件 + 杀进程树**：
+
+```zsh
+opencode run --model <model> "<提示>" > run.out 2>&1 & pid=$!
+( sleep 600; pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null ) & wd=$!
+wait $pid; rc=$?; kill $wd 2>/dev/null; tail -25 run.out
+```
+
+要点：不套子壳/管道；`pkill -P $pid` 先杀子进程再杀本体；输出进文件，
+进程死了文件还在。
+
+**坑 2：预检通过 ≠ 延迟正常。** 同一天预检 3 秒返回 ok，随后同模型的
+单次 agent 调用耗时 **15.6 分钟**（服务端排队/限流重试）。预检只验证
+「可用性」，不验证「延迟」。完整 workflow 的看门狗要按最坏情况给
+（4 agent 链 ≥ 20 分钟），或干脆不依赖 stdout——**journal + traceDir
+落盘文件天然免疫进程被杀**，事后取证优先读它们：
+
+- `<journalDir>/<runId>.json`：步骤状态/时间戳/累积状态（被杀的 run 停在 running/failed）；
+- `<traceDir>/events.jsonl`：事件流（agent.started 有 time，可直接算每步耗时）；
+- 主会话工具结果原文：`sqlite3 ~/.local/share/opencode/opencode.db
+  "SELECT data FROM session_message WHERE data LIKE '%<runId>%'"`
+  （含失败文本与恢复提示，比 stdout 可靠）。
+
+**意外的正面结论：** durable 设计让「被杀的 run」不再是废数据——
+journal 里 completed 的步骤在恢复时直接跳过（跨目录/跨服务共享
+journalDir 即可 resume），等于每次挂起事故都是一次免费的 durability 演练。

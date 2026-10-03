@@ -33,6 +33,12 @@ export interface SequenceOptions {
 
 type Step<T> = (prev?: T) => Promise<T>
 
+/** 可注入的步骤编排入口（registry ctx.runSteps 的结构类型；缺省 = sequence 直跑） */
+export type RunStepsFn = <T>(
+  steps: Array<Step<T>>,
+  options?: SequenceOptions,
+) => Promise<T | undefined>
+
 function assertStepCount(journal: RunJournal | undefined, steps: number): void {
   if (journal && journal.run.steps.length !== steps) {
     throw new Error(
