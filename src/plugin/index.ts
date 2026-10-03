@@ -36,6 +36,7 @@ import type { ExecutionStore } from "../state/store.js"
 import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
+import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
 import { GitWorktreeProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
@@ -168,6 +169,7 @@ export default Plugin.define({
       .register(smokeWorkflow())
       .register(reliableWorkflow({ checkCommand: options.checkCommand }))
       .register(artifactWorkflow())
+      .register(featureDevelopmentWorkflow({ checkCommand: options.checkCommand }))
 
     // P2.5 durable journal：配置 journalDir 后，run 经 startWorkflow/resumeWorkflow
     // 走持久化链路（journal 记录 workflow {id, version} + args + steps，可恢复）
