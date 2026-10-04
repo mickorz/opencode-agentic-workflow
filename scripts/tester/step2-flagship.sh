@@ -66,8 +66,11 @@ echo "[2/3] 运行 feature-development（全程约 10–15 分钟：check 阶段
 echo "      慢属正常；每 60 秒打印一次进度心跳，请勿中断）…"
 
 TOPIC='在 src/greet.js 新增导出函数 greet(name)：name 为空或缺失时返回 "Hello, stranger!"，否则返回 "Hello, <name>!"。并在 tests/greet.test.js 用 node:test + assert/strict 编写单测，覆盖：正常名字、空字符串。代码风格参考现有 src/app.js'
+# checkpointMode=auto-approve（需插件 ≥0.4.0）：调用级显式覆盖审批门——
+# 即使宿主机上有别的项目留下的长驻 opencode 进程（其插件配置会顶替本目录
+# 配置，实测会把 auto-approve 换成交互门导致 5 分钟假失败），显式参数照样放行
 opencode run --model "$PROVIDER/$MODEL" \
-  "调用 workflow 工具：flow=feature-development（必须是这个 flow，不要换成其他 flow），topic=$TOPIC" \
+  "调用 workflow 工具：flow=feature-development（必须是这个 flow，不要换成其他 flow），topic=${TOPIC}，checkpointMode=auto-approve（这个参数必须传）" \
   > run.out 2>&1 &
 PID=$!
 ( sleep "$BUDGET"; pkill -P "$PID" 2>/dev/null; kill "$PID" 2>/dev/null ) & WD=$!
