@@ -1,7 +1,7 @@
 {
   "plugins": [
     {
-      "package": "../../dist/plugin",
+      "package": "@mickorz/opencode-agentic-workflow",
       "options": {
         "model": {
           "providerID": "glm",

@@ -10,10 +10,7 @@ reviewer 审查真实 diff → 人工审批 → 分支交付」全链路。
 ## 运行
 
 ```bash
-# 1. 仓库根构建插件（dist/ 是插件的加载入口）
-npm install && npm run build        # 在仓库根执行一次
-
-# 2. 本目录无需任何安装，直接启动
+# 无需构建：插件按 npm 包名解析已发布版本（首次运行自动下载）
 cd examples/01-coding-reliable
 ```
 
@@ -48,10 +45,11 @@ checkpoint TUI 弹出确认框：接受 / 拒绝该实现
 
 ## 配置要点（opencode.json）
 
-- **插件引用用相对路径 `"../../dist/plugin"`**（相对项目目录解析，需先在仓库根
-  `npm run build`）。注意：npm 包名形式（`"@mickorz/opencode-agentic-workflow"`）
-  会被 OpenCode 安装到它自己的缓存并按 registry 版本解析——**项目 node_modules
-  对其无效**；待 npm 发布含本 workflow 的版本（≥0.3.1）后可切换为包名引用。
+- **插件引用用 npm 包名 `"@mickorz/opencode-agentic-workflow"`**（解析 registry
+  已发布版本，无需本地构建）。注意：包名形式由 OpenCode 安装到**它自己的缓存**
+  并按 registry 版本解析——项目 node_modules 对其无效，改动本仓库源码不会
+  影响示例行为；开发未发布版本时临时换相对路径 `"../../dist/plugin"`
+  （需先在仓库根 `npm run build`）。
 - `checkpoint.mode: "interactive"`——TUI 审批弹框（人工决策的招牌体验）。
   若用 `opencode run` 无 TUI 跑，请改为 `"auto-approve"`
   （interactive 在无 TUI 应答时 5 分钟超时后按 reject 安全失败）。
