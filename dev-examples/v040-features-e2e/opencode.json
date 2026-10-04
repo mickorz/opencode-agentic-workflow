@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "package": "../../dist/plugin",
+      "options": {
+        "model": { "providerID": "glm", "id": "glm-5.3-flash" },
+        "agent": "build",
+        "concurrency": 3,
+        "checkpoint": { "mode": "interactive" },
+        "journalDir": ".agw/journal",
+        "traceDir": ".agw/trace"
+      }
+    }
+  ]
+}
