@@ -152,7 +152,7 @@ test("校验：步骤键互斥与未知键", async () => {
   const cases: Array<[string, unknown, RegExp]> = [
     ["both-keys.json", { id: "x-flow", steps: [{ name: "s", agent: "a", checkpoint: "c" }] }, /exactly one of/],
     ["no-key.json", { id: "x-flow", steps: [{ name: "s" }] }, /exactly one of/],
-    ["unknown-step-key.json", { id: "x-flow", steps: [{ name: "s", agent: "a", retries: 3 }] }, /unknown key\(s\) \[retries\]/],
+    ["unknown-step-key.json", { id: "x-flow", steps: [{ name: "s", agent: "a", temperature: 0.7 }] }, /unknown key\(s\) \[temperature\]/],
     ["unknown-top-key.json", { id: "x-flow", hooks: true, steps: [{ name: "s", agent: "a" }] }, /unknown top-level key "hooks"/],
     ["verify-shape.json", { id: "x-flow", steps: [{ name: "s", verify: { criteria: "x" } }] }, /verify must be/],
   ]

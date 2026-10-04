@@ -28,6 +28,10 @@ import { fileExists as fileExistsPredicate } from "../quality/predicates.js"
 interface AgentStepDecl {
   name: string
   agent: string
+  /** P1-4 调用级选项（仅 agent 步可用） */
+  model?: string
+  timeoutMs?: number
+  retries?: number
 }
 interface CheckpointStepDecl {
   name: string
@@ -131,6 +135,28 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
       }
     }
     const kind = present[0]!
+    // P1-4：调用级选项键仅对 agent 步开放
+    const optionKeys = kind === "agent" ? ["model", "timeoutMs", "retries"] : []
+    if (kind === "agent") {
+      if (
+        step.model !== undefined &&
+        (typeof step.model !== "string" || !step.model.includes("/"))
+      ) {
+        return { ok: false, error: at(`steps[${index}].model must be "providerID/modelId"`) }
+      }
+      if (
+        step.timeoutMs !== undefined &&
+        (typeof step.timeoutMs !== "number" || !Number.isFinite(step.timeoutMs) || step.timeoutMs <= 0)
+      ) {
+        return { ok: false, error: at(`steps[${index}].timeoutMs must be a positive number (ms)`) }
+      }
+      if (
+        step.retries !== undefined &&
+        (typeof step.retries !== "number" || !Number.isInteger(step.retries) || step.retries < 0)
+      ) {
+        return { ok: false, error: at(`steps[${index}].retries must be a non-negative integer`) }
+      }
+    }
     if (kind === "verify") {
       const v = step.verify
       if (typeof v !== "object" || v === null || typeof (v as Record<string, unknown>).artifact !== "string") {
@@ -148,9 +174,14 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
     } else if (typeof step[kind] !== "string") {
       return { ok: false, error: at(`steps[${index}].${kind} must be a string (template)`) }
     }
-    const unknownStepKeys = Object.keys(step).filter((k) => k !== "name" && !(STEP_KEYS as readonly string[]).includes(k))
+    const unknownStepKeys = Object.keys(step).filter(
+      (k) =>
+        k !== "name" &&
+        !(STEP_KEYS as readonly string[]).includes(k) &&
+        !optionKeys.includes(k),
+    )
     if (unknownStepKeys.length > 0) {
-      return { ok: false, error: at(`steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] (allowed: name + 恰好一个步骤键)`) }
+      return { ok: false, error: at(`steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] (allowed: name + 恰好一个步骤键${kind === "agent" ? " + agent 可选 model/timeoutMs/retries" : ""})`) }
     }
   }
   if (dw.output !== undefined && typeof dw.output !== "string") {
@@ -225,7 +256,12 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
       const built = dw.steps.map((step) => {
         if ("agent" in step) {
           return async (prev: Record<string, unknown> | undefined) => {
-            const result = await agent(resolve(step.agent))
+            // P1-4：声明级调用选项透传（model/timeoutMs/retries）
+            const result = await agent(resolve(step.agent), {
+              ...(step.model !== undefined ? { model: step.model } : {}),
+              ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
+              ...(step.retries !== undefined ? { retries: step.retries } : {}),
+            })
             stepOutputs.set(step.name, result.output)
             return { ...prev, [step.name]: result.output }
           }

@@ -72,7 +72,8 @@ export class OpenCodeV2Executor implements AgentExecutor {
     const created = await this.session.create({
       parentID: this.parentSessionId,
       title: `${this.titlePrefix}#${this.counter}`,
-      model: this.model,
+      // P1-4 调用级覆盖：task.model 优先于构造期默认（agent() 注入）
+      model: task.model ?? this.model,
       agent: this.agent,
       // P2.7 隔离：子会话 cwd 绑定到 workflow workspace（worktree 根）
       ...(task.cwd ? { location: { directory: task.cwd } } : {}),

@@ -25,7 +25,8 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
   "description": "给工具枚举看的一句话",
   "args": { "...": "可选，JSON Schema；缺省 = 仅 topic" },
   "steps": [
-    { "name": "draft", "agent": "针对 {{topic}} 的分析…（禁止调用 workflow 工具）" },
+    { "name": "draft", "agent": "针对 {{topic}} 的分析…（禁止调用 workflow 工具）",
+      "model": "glm/glm-5.3-flash", "timeoutMs": 300000, "retries": 1 },  // ← agent 步可选调用级选项
     { "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "合格标准" } },
     { "name": "file",  "fileExists": "out.md" },          // 相对 workspaceRoot
     { "name": "gate",  "checkpoint": "「{{topic}}」已生成，批准？" }
@@ -38,6 +39,12 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
 引用）、`checkpoint`（审批门）、`verify`（语义评审，否决即失败）、`fileExists`
 （存在性断言）。模板变量：`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`；
 未知变量 = 该步骤失败（journal 可见，绝不静默空串）。
+
+**agent 步调用级选项**（P1-4，仅 agent 步可用）：
+`model`（`"providerID/modelId"`，覆盖插件级子会话模型）、`timeoutMs`
+（单次尝试超时；超时不硬杀底层会话，只是不再等待）、`retries`
+（失败重试次数，对超时同样生效——每次尝试独立计时）。
+代码式流程对应 `agent(prompt, { model, timeoutMs, retries, retryDelayMs })`。
 
 **声明式 author 的纪律**（对应下方通用纪律的适用子集）：
 

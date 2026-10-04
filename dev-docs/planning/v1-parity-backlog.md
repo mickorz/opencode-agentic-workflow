@@ -53,9 +53,14 @@
    外部测试「杀进程后 run 悬置」信号的解）。已知限制：单进程同时仅一个
    workflow（gate/workspace 全局单例，L 范围架构项与 P2-9 同根）。
    测试 +8（全量 227/227）；E2E：后台启动→轮询→journal completed×3→产物落盘。
-4. **agent 调用级选项**（M）——v1：per-call `model` / `tier`（model-tiers.json 分层，
-   小模型干活大模型把关）/ `timeoutMs` / `retries`。v2：model/agent 是插件级全局。
-   分步：先 per-call model + timeoutMs/retries（executor 已有注入点），tier 体系缓发。
+4. ~~**agent 调用级选项**（M）~~ ✅ **已完成（2026-10-05，随 0.5.0 发布）**——
+   `agent(prompt, { model, timeoutMs, retries, retryDelayMs })`：model
+   （"providerID/modelId"，经 AgentTask.model 透传，executor 以 task.model
+   优先于构造期默认）；timeoutMs（单次尝试超时，超时不硬杀底层会话——与
+   run 控制同一诚实语义）；retries 对超时同样生效（每次尝试独立计时）。
+   声明式 agent 步开放可选键 model/timeoutMs/retries（校验逐一指名；
+   非 agent 步带选项键 = unknown key 拒绝）。tier 体系仍缓发。
+   测试 +10（全量 237/237）；E2E：声明式带三项选项实跑 completed、产物落盘。
 5. **组合子补齐：pipeline / race / judgePanel**（M）——v1 DSL 三件缺失件
    （流水线多阶段整形；首达取胜；评审团打分选优）。代码式可手工组合，
    但声明式与内置流程应有原语。judgePanel 与 verify 的 lens 想法同源。

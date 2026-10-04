@@ -8,6 +8,13 @@
  * 未来可新增 ClaudeCodeExecutor / CodexExecutor 等实现，Core 不感知。
  */
 
+/** 子会话模型引用（对应宿主 models 列表的 providerID/id） */
+export interface AgentModelRef {
+  providerID: string
+  id: string
+  variant?: string
+}
+
 export interface AgentTask {
   /** 发给子 agent 的提示词 */
   prompt: string
@@ -16,6 +23,11 @@ export interface AgentTask {
    * executor 应将其绑定为子会话 cwd；未启用时不传。
    */
   cwd?: string
+  /**
+   * P1-4 调用级模型覆盖：存在时优先于 executor 构造期默认模型。
+   * 由 agent(prompt, { model }) 解析注入；executor 只消费。
+   */
+  model?: AgentModelRef
 }
 
 /** token 用量（结构对齐宿主 API 的 usage 形状，但为 Core 自有类型） */
