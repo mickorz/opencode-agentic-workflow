@@ -71,8 +71,16 @@
    （全量 250/250）。**声明式嵌套流程（pipeline/race 进 JSON）为新增缺口**：
    resumeSequence 仅支持 sequence 前缀恢复，嵌套形状需先设计断点语义
    （记录在「后续缺口」）。
-6. **结构化输出**（M，有前置调研）——v1：agent 按 schema 返回对象。v2：纯文本。
-   依赖 OpenCode v2 session API 的结构化输出能力，先做 API 验证再排实现。
+6. ~~**结构化输出**（M，有前置调研）~~ ✅ **以 shim 形态完成（2026-10-05，随 0.5.0
+   发布）**——前置调研结论：**OpenCode v2 会话 API 无原生结构化输出**
+  （`@opencode/schema` 2.0.22 的 `PromptInput.Prompt` 仅
+   text/files/agents/skills，v1 的 `format: "json_schema"` → `info.structured`
+   链路在 v2 不存在）。落地：`agent(prompt, { schema })` shim——prompt 追加
+   JSON 契约指令 + `extractJson` 解析（兼容围栏包裹）+ 复用 `validateArgs`
+   校验 + **校验在重试环内**（违规输出与执行失败同等可被 retries 重试）；
+   结果挂 `result.structured`。文档如实标注「prompt 约束 + 校验兜底，
+   非宿主级保证」。上游若补原生能力，executor 层换实现、调用面不变。
+   测试 +6（全量 256/256）。
 
 ### P2 —— 差异化体验 / 生态（按反馈启动）
 

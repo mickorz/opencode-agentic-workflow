@@ -46,6 +46,13 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
 （失败重试次数，对超时同样生效——每次尝试独立计时）。
 代码式流程对应 `agent(prompt, { model, timeoutMs, retries, retryDelayMs })`。
 
+**结构化输出**（P1-6，代码式）：`agent(prompt, { schema })` ——prompt 自动
+追加 JSON 契约指令，输出经解析 + schema 校验后挂 `result.structured`；
+解析/校验失败抛错且**可被 retries 重试**（校验在重试环内，每次重试重新
+生成）。注意：OpenCode v2 会话 API 无原生结构化输出（v1 的
+`format: "json_schema"` 在 v2 不存在），这是 prompt 约束 + 校验兜底的
+shim，非宿主级保证——schema 简单（数值/枚举）时直接要「只回数字」更稳。
+
 **声明式 author 的纪律**（对应下方通用纪律的适用子集）：
 
 - `agent` prompt 里**仍要写「禁止调用 workflow / workflow_metrics 工具」**

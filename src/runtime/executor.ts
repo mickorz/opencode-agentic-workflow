@@ -42,6 +42,12 @@ export interface TokenUsage {
 export interface AgentResult {
   /** 子 agent 的最终文本输出 */
   output: string
+  /**
+   * 结构化输出（P1-6 shim）：agent(prompt, { schema }) 时，output 经
+   * 解析 + validateArgs 校验后的 JSON 值。executor 不负责填充（宿主无
+   * 原生结构化输出），由 agent() 原语统一挂载。
+   */
+  structured?: unknown
   /** token 用量（宿主能提供时；如 OpenCode V2 的 assistant 消息 tokens 字段） */
   usage?: TokenUsage
   /** 本次调用的美元成本（宿主直接给出时；如 V2 的 cost 字段） */

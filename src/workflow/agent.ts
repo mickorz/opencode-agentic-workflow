@@ -19,6 +19,7 @@ import type { AgentResult } from "../runtime/executor.js"
 import { requireExecutor } from "../runtime/engine.js"
 import { emitEvent, preview } from "../observability/events.js"
 import { currentWorkspace } from "../workspace/ambient.js"
+import { validateArgs, type ArgsSchema } from "../registry/schema.js"
 
 export interface AgentCallOptions {
   /** 覆盖本次调用的模型："providerID/modelId"（或对象形式，含 variant） */
@@ -29,6 +30,39 @@ export interface AgentCallOptions {
   retries?: number
   /** 重试间隔 ms（默认 0） */
   retryDelayMs?: number
+  /**
+   * P1-6 结构化输出 shim：要求子 agent 按 JSON Schema 返回 JSON 值，
+   * 输出经解析 + validateArgs 校验后挂到 result.structured。
+   * 注意：OpenCode v2 会话 API 无原生结构化输出（PromptInput.Prompt 2.0.22
+   * 仅 text/files/agents/skills，无 v1 的 format 字段）——本 shim 靠
+   * prompt 指令 + 校验 + 失败可重试（retries）保证可靠性，非宿主级约束。
+   */
+  schema?: ArgsSchema
+}
+
+/** 结构化输出解析/校验失败（配合 retries 可重试） */
+export class AgentSchemaError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "AgentSchemaError"
+  }
+}
+
+/** 从子 agent 文本输出提取 JSON 值：直接解析，失败则截取首个 { 到最后一个 } */
+function extractJson(output: string): unknown {
+  const text = output.trim()
+  try {
+    return JSON.parse(text)
+  } catch {
+    const start = text.indexOf("{")
+    const end = text.lastIndexOf("}")
+    if (start >= 0 && end > start) {
+      return JSON.parse(text.slice(start, end + 1))
+    }
+    throw new AgentSchemaError(
+      `agent output is not valid JSON: "${text.slice(0, 80)}"`,
+    )
+  }
 }
 
 /** 单次尝试超时（步骤级失败、journal 可见；底层会话不被硬杀） */
@@ -86,8 +120,16 @@ async function withRetries<T>(run: () => Promise<T>, retries: number, delayMs: n
 
 export async function agent(prompt: string, options: AgentCallOptions = {}): Promise<AgentResult> {
   const workspace = currentWorkspace()
+  // P1-6 结构化输出 shim：schema 存在时给 prompt 追加 JSON 指令，
+  // 输出经解析 + validateArgs 校验后挂到 result.structured
+  const effectivePrompt =
+    options.schema === undefined
+      ? prompt
+      : prompt +
+        "\n\nRespond with ONLY a JSON value matching this schema - no markdown fences, no commentary:\n" +
+        JSON.stringify(options.schema)
   const task = {
-    prompt,
+    prompt: effectivePrompt,
     ...(options.model !== undefined ? { model: parseModelRef(options.model) } : {}),
     ...(workspace ? { cwd: workspace.root } : {}),
   }
@@ -98,7 +140,22 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
   const startedAt = Date.now()
   try {
     const result = await withRetries(
-      () => withTimeout(() => requireExecutor().execute(task), options.timeoutMs),
+      () =>
+        withTimeout(async () => {
+          const executed = await requireExecutor().execute(task)
+          // P1-6：解析+校验放进重试环内——违规输出与执行失败同等可重试
+          if (options.schema !== undefined) {
+            const parsed = extractJson(executed.output)
+            const violations = validateArgs(options.schema, parsed)
+            if (violations.length > 0) {
+              throw new AgentSchemaError(
+                `agent output does not match schema: ${violations.join("; ")}`,
+              )
+            }
+            executed.structured = parsed
+          }
+          return executed
+        }, options.timeoutMs),
       retries,
       retryDelayMs,
     )
