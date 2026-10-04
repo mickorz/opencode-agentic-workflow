@@ -42,7 +42,11 @@ START=$(date +%s)
 while kill -0 "$PID" 2>/dev/null; do
   sleep 45
   kill -0 "$PID" 2>/dev/null || break
-  LAST="$(tail -c 300 smoke.out 2>/dev/null | LC_ALL=C sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' | tr '\n' ' ' | tail -c 100)"
+  LAST="$(tail -c 300 smoke.out 2>/dev/null \
+    | LC_ALL=C sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' \
+    | LC_ALL=C tr '\n' ' ' \
+    | tail -c 120 \
+    | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || :)"
   echo "  … 已运行 $(( $(date +%s) - START ))s（最近输出：${LAST:-尚无}）"
 done
 STATUS=0
