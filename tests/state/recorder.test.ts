@@ -11,6 +11,7 @@ import { test } from "node:test"
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import type { ExecutionStore } from "../../src/state/store.js"
 import { RunJournal } from "../../src/state/recorder.js"
+import { createEventBus, setEventBus } from "../../src/observability/events.js"
 
 let baseDir: string
 let store: ExecutionStore
@@ -150,4 +151,56 @@ test("显式 runId 透传（便于测试与外部引用）", async () => {
   })
   assert.equal(journal.run.runId, "run_fixed_id")
   assert.ok(await store.getRun("run_fixed_id"))
+})
+
+test("P2-8: 每次状态转换发射 run.progress 快照（全量、可序列化、不含 output）", async () => {
+  const events: Array<{ type: string; run?: unknown }> = []
+  const bus = createEventBus()
+  bus.subscribe((event) => events.push(event as { type: string; run?: unknown }))
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "progress-demo", version: "1.2.0" },
+      stepNames: ["gather", "build"],
+      stepCount: 2,
+    })
+    await journal.stepStarted(0, { topic: "T" })
+    await journal.stepCompleted(0, { big: "x".repeat(500) })
+    await journal.stepStarted(1)
+    await journal.fail(new Error("boom"))
+
+    const progress = events
+      .filter((e) => e.type === "run.progress")
+      .map((e) => e.run as {
+        runId: string
+        workflow: { id: string; version: string }
+        status: string
+        steps: Array<{ name?: string; status: string }>
+        failure?: string
+      })
+    // start + 4 次转换 = 5 个快照
+    assert.equal(progress.length, 5)
+    assert.deepEqual(
+      progress.map((p) => p.status),
+      ["running", "running", "running", "running", "failed"],
+    )
+    // 形状：workflow 标识 + 步骤名 + 失败摘要（截断 200）
+    for (const p of progress) {
+      assert.deepEqual(p.workflow, { id: "progress-demo", version: "1.2.0" })
+      assert.equal(p.steps.length, 2)
+      assert.deepEqual(p.steps.map((s) => s.name), ["gather", "build"])
+      // 快照可序列化（RPC 传输前提）
+      JSON.stringify(p)
+    }
+    const final = progress[4]
+    assert.ok(final)
+    assert.equal(final.failure, "boom")
+    // 既有 fail 语义：仅 pending -> skipped；中断时仍处 running 的步骤保持原状
+    assert.deepEqual(
+      final.steps.map((s) => s.status),
+      ["completed", "running"],
+    )
+  } finally {
+    setEventBus(createEventBus())
+  }
 })

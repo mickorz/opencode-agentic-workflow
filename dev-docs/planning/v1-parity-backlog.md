@@ -95,9 +95,15 @@
    修一处 HOURLY 正则少星的转写 bug）；E2E 真机全语义：scheduled→success、
    manual→success、单飞冲突 scheduled→skipped 三种记录 + journal 两连
    completed + 产物落盘。
-8. **TUI 进度树与节点详情**（L）——v1 招牌体验：侧栏实时树、节点详情（结果 +
-   模型/时长/token 元数据 + Open Session 回放）、嵌套层级树。v2：trace JSONL
-   落盘但无可视化。技术路径已有底子（interactive gate 的 RPC 双形态）。
+8. ~~**TUI 进度树与节点详情**（L）~~ **已闭环（2026-10-06，P2-8）**——
+   v2 落法：journal 每次状态转换派发 `run.progress` 全量快照事件 →
+   ProgressBoard（事件总线订阅 + journalDir 历史种子 + 容量 20）→
+   `agentic-workflow-progress` RPC（snapshot 方法 + progress 事件）→
+   TUI `/workflow` 命令打开 session.panel 面板（solid 渲染，view model 纯函数层
+   `progress-view.ts` 单测全覆盖）。运行时依赖精确 pin（solid-js 1.9.12 /
+   @opentui 0.5.14，v1 双实例教训）。节点详情/模型 token 元数据/Open Session
+   回放未做（快照刻意不带 output；后续可加 journal 详情 RPC）；面板视觉需
+   交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配）。
 9. **嵌套工作流**（L，架构前置）——v1：原生 `workflow()` 原语 + lineage。v2：
    递归守卫**显式禁止**（自饿死事故）。前置：checkpoint gate / executor 的
    per-run 化——与 0.4.0 已知限制「全局 gate 单例竞态」同根，是同一个 L 范围

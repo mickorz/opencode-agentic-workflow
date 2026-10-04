@@ -60,7 +60,31 @@ export type WorkflowEvent = WorkflowEventBase &
     | { type: "step.started"; index: number }
     | { type: "step.completed"; index: number; durationMs: number }
     | { type: "step.failed"; index: number; error: string }
+    /**
+     * P2-8 进度树数据源：journal 每次状态转换发射完整 run 快照
+     * （步级 started/completed/failed + run 级 complete/fail/abort + 创建时）。
+     * 消费方（进度 board / TUI 面板）无需增量对账——单飞语义下顺序天然一致。
+     */
+    | { type: "run.progress"; run: RunProgressSnapshot }
   )
+
+/** run 进度快照（RPC 传输形状；不含步骤 output——详情看 journal） */
+export interface RunProgressSnapshot {
+  runId: string
+  workflow: { id: string; version: string }
+  status: string
+  startedAt: number
+  completedAt?: number
+  /** run 级失败摘要（截断 200 字符） */
+  failure?: string
+  steps: Array<{
+    index: number
+    name?: string
+    status: string
+    startedAt?: number
+    completedAt?: number
+  }>
+}
 
 /** 派发用入参（无需填 time，emitEvent 自动补） */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never

@@ -22,6 +22,7 @@ import {
 } from "./journal.js"
 import type { ExecutionStore } from "./store.js"
 import type { WorkspaceIdentity } from "../workspace/provider.js"
+import { emitEvent, type RunProgressSnapshot } from "../observability/events.js"
 
 export interface JournalStartInput {
   workflow: WorkflowIdentity
@@ -34,6 +35,27 @@ export interface JournalStartInput {
   runId?: string
 }
 
+/** run -> 进度快照（P2-8 数据源；不含步骤 output，失败摘要截断 200 字符） */
+export function toProgressSnapshot(run: WorkflowRun): RunProgressSnapshot {
+  return {
+    runId: run.runId,
+    workflow: { id: run.workflow.id, version: run.workflow.version },
+    status: run.status,
+    startedAt: run.startedAt,
+    ...(run.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
+    ...(run.failure !== undefined
+      ? { failure: run.failure.message.slice(0, 200) }
+      : {}),
+    steps: run.steps.map((step) => ({
+      index: step.index,
+      ...(step.name !== undefined ? { name: step.name } : {}),
+      status: step.status,
+      ...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
+      ...(step.completedAt !== undefined ? { completedAt: step.completedAt } : {}),
+    })),
+  }
+}
+
 export class RunJournal {
   private constructor(
     private readonly store: ExecutionStore,
@@ -44,6 +66,7 @@ export class RunJournal {
   static async start(store: ExecutionStore, input: JournalStartInput): Promise<RunJournal> {
     const run = createRun(input)
     await store.createRun(run)
+    emitEvent({ type: "run.progress", run: toProgressSnapshot(run) })
     return new RunJournal(store, run)
   }
 
@@ -67,6 +90,11 @@ export class RunJournal {
     return step
   }
 
+  /** P2-8：状态转换后派发进度快照（同步 fan-out，handler 抛错被 bus 隔离） */
+  private emitProgress(): void {
+    emitEvent({ type: "run.progress", run: toProgressSnapshot(this.run) })
+  }
+
   async stepStarted(index: number, input?: unknown): Promise<void> {
     this.assertOpen()
     const step = this.step(index)
@@ -75,6 +103,7 @@ export class RunJournal {
     step.startedAt = Date.now()
     this.run.currentStep = index
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   async stepCompleted(index: number, output?: unknown): Promise<void> {
@@ -84,6 +113,7 @@ export class RunJournal {
     step.output = output
     step.completedAt = Date.now()
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   async stepFailed(index: number, error: unknown): Promise<void> {
@@ -93,6 +123,7 @@ export class RunJournal {
     step.error = toErrorRecord(error)
     step.completedAt = Date.now()
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   /** run 成功收口 */
@@ -101,6 +132,7 @@ export class RunJournal {
     this.run.status = "completed"
     this.run.completedAt = Date.now()
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   /** run 失败收口：仍为 pending 的步骤标记 skipped（fail-fast 下它们不会被执行） */
@@ -113,6 +145,7 @@ export class RunJournal {
       if (step.status === "pending") step.status = "skipped"
     }
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   /**
@@ -130,6 +163,7 @@ export class RunJournal {
       if (step.status !== "completed" && step.status !== "failed") step.status = "skipped"
     }
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 
   /**
@@ -177,5 +211,6 @@ export class RunJournal {
       }
     }
     await this.store.saveRun(this.run)
+    this.emitProgress()
   }
 }

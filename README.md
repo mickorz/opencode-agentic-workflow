@@ -377,6 +377,30 @@ npm 包内附两个 agent skill（`skills/` 目录，随包分发），教主 ag
 挂载后 agent 会在相关请求时自动加载；也可在 prompt 里显式 `@workflow-authoring`
 指定。
 
+## TUI 进度面板
+
+在交互式 TUI 里输入 `/workflow`（或命令面板搜 "Workflow progress"）打开进度面板：
+近期 run 一览（含 journal 里的历史 run），最新 run 展开步骤树，状态实时刷新——
+journal 每次状态变更都会派发 `run.progress` 全量快照事件。
+
+```
+Agentic Workflow
+✗ feature-development@1.0.0  5.0s
+  ✓ gather  2.0s
+  ▶ implement  2.5s
+  · verify
+  ↳ verify rejected the patch
+✓ paced@1.0.0  24.0s
+```
+
+数据链路：RunJournal 状态转换 → `run.progress` 事件总线 → ProgressBoard（容量 20，
+journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RPC。headless
+（`opencode run`）下没有 TUI 监听，转发零成本；同一份事件流也会写进 traceDir
+（`events.jsonl`），可作为无头观测替代。
+
+注意：面板渲染属交互式 TUI 行为，需在真实 TUI 里人工确认（本仓库自动化覆盖到
+server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E 证据）。
+
 ## Journal 数据模型
 
 `<journalDir>/<runId>.json`（每次状态变更原子落盘）：
