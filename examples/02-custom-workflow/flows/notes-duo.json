@@ -1,0 +1,22 @@
+{
+  "id": "notes-duo",
+  "version": "1.0.0",
+  "description": "嵌套组合示例：同一子流程 note 复用两次（正题 + 复盘），最后汇总审批",
+  "steps": [
+    {
+      "name": "main",
+      "subflow": "note",
+      "args": { "topic": "{{topic}}", "file": "note-main.md" }
+    },
+    {
+      "name": "retro",
+      "subflow": "note",
+      "args": { "topic": "复盘：{{topic}}", "file": "note-retro.md" }
+    },
+    {
+      "name": "gate",
+      "checkpoint": "两份笔记已生成（{{steps.main}} / {{steps.retro}}），批准归档？"
+    }
+  ],
+  "output": "duo complete: {{steps.main}} + {{steps.retro}}"
+}

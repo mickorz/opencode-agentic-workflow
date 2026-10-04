@@ -29,16 +29,24 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
       "model": "glm/glm-5.3-flash", "timeoutMs": 300000, "retries": 1 },  // ← agent 步可选调用级选项
     { "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "合格标准" } },
     { "name": "file",  "fileExists": "out.md" },          // 相对 workspaceRoot
+    { "name": "child", "subflow": "other-flow", "args": { "topic": "{{topic}}" } },  // ← 嵌套已注册流程（P2-9）
     { "name": "gate",  "checkpoint": "「{{topic}}」已生成，批准？" }
   ],
   "output": "定稿：{{steps.draft}}"   // 缺省 = 最后一个 agent 步输出
 }
 ```
 
-**步骤四类**（互斥键，恰好一个）：`agent`（子 agent，输出供后续 `{{steps.<name>}}`
+**步骤五类**（互斥键，恰好一个）：`agent`（子 agent，输出供后续 `{{steps.<name>}}`
 引用）、`checkpoint`（审批门）、`verify`（语义评审，否决即失败）、`fileExists`
-（存在性断言）。模板变量：`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`；
+（存在性断言）、`subflow`（嵌套另一个已注册流程）。模板变量：
+`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`；
 未知变量 = 该步骤失败（journal 可见，绝不静默空串）。
+
+**subflow 步**（P2-9）：`"subflow": "flow-id"` + 可选 `args`（原始值或模板
+混合的对象）。子 run 有独立 journal（`parentRunId`/`depth` lineage；进度
+面板缩进挂树）；输出进 `{{steps.<name>}}`；失败按普通步骤失败处理
+（父 run fail-fast）。gate/workspace 继承父 run；深度上限 3；需要插件
+配置 `journalDir`。代码式对应 `ctx.subflow(id, args, { version })`。
 
 **verify 步增强**（P2-11）：`reviewers: N`（N 个同质评审员，默认 1）；
 `threshold: 0.5`（投票阈值 (0,1]，pass 占比达标即通过，缺省 1 = 全票）；
