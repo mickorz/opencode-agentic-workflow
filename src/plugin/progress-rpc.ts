@@ -33,6 +33,8 @@ const runSnapshotSchema = {
     startedAt: { type: "number" },
     completedAt: { type: "number" },
     failure: { type: "string" },
+    parentRunId: { type: "string" },
+    depth: { type: "number" },
     steps: {
       type: "array",
       items: {

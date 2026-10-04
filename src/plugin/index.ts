@@ -23,7 +23,7 @@
 import { Plugin } from "@opencode/plugin"
 import path from "node:path"
 
-import { getCheckpointGate, setCheckpointGate } from "../quality/checkpoint.js"
+import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { createFileTraceSink } from "../observability/trace.js"
@@ -34,7 +34,6 @@ import {
   startWorkflowDetached,
   resumeWorkflow,
   runWorkflowInline,
-  type DetachedWorkflowRun,
 } from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
 import { buildWorkflowArgs } from "./tool-args.js"
@@ -55,14 +54,11 @@ import {
   InteractiveCheckpointGate,
   type InteractiveCheckpointOptions,
 } from "./interactive-checkpoint-gate.js"
-import {
-  applyCheckpointModeOverride,
-  parseCheckpointModeOverride,
-} from "./checkpoint-override.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
 import { buildPriceTable, estimateCostUSD } from "./price-table.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 import { bindProgressBoard } from "./progress-board.js"
+import { buildCheckpointGate, parseCheckpointModeOverride } from "./checkpoint-override.js"
 
 export default Plugin.define({
   id: "agentic-workflow",
@@ -387,15 +383,19 @@ export default Plugin.define({
             return {
               output:
                 "[agentic-workflow] nested workflow calls are not allowed: " +
-                "another workflow is running. Complete the task directly yourself.",
+                "another workflow is running. Complete the task directly yourself. " +
+                "(Workflow authors who need composition should use a subflow step " +
+                "or ctx.subflow() inside the workflow definition instead.)",
             }
           }
           workflowDepth += 1
-          // P3 Blocker 修复：调用级 checkpoint 覆盖（守护进程宿主下
-          // init 配置可能来自别的项目——显式参数免疫单例投毒）
-          const gateRestore = applyCheckpointModeOverride(
+          // P3 Blocker 修复 + P2-9：调用级 checkpoint 覆盖——为本次 run 构建
+          // 策略门经 RunLaunchOptions.gate 注入（run 级，无换装/恢复竞态；
+          // 守护进程宿主下 init 配置可能来自别的项目，显式参数免疫）
+          const overrideGate = buildCheckpointGate(
             parseCheckpointModeOverride(parsed.checkpointMode),
           )
+          const gateOptions = overrideGate ? { gate: overrideGate } : {}
 
           const workflowId =
             typeof parsed.flow === "string" && parsed.flow.length > 0
@@ -414,7 +414,8 @@ export default Plugin.define({
           ) {
             try {
               const detached = await startWorkflowDetached(
-                registry, store, workflowId, workflowArgs, { workspace: workspaceBinding },
+                registry, store, workflowId, workflowArgs,
+                { workspace: workspaceBinding, ...gateOptions },
               )
               detached.completion
                 .then((result) =>
@@ -430,7 +431,6 @@ export default Plugin.define({
                 )
                 .finally(() => {
                   workflowDepth -= 1
-                  gateRestore?.()
                 })
               return {
                 output:
@@ -444,7 +444,6 @@ export default Plugin.define({
               }
             } catch (error) {
               workflowDepth -= 1
-              gateRestore?.()
               const message = error instanceof Error ? error.message : String(error)
               return {
                 output: `[agentic-workflow] background start failed: ${message}`,
@@ -463,6 +462,7 @@ export default Plugin.define({
               }
               const resumed = await resumeWorkflow(registry, store, parsed.resumeRunId, {
                 workspace: workspaceBinding,
+                ...gateOptions,
               })
               return {
                 output:
@@ -474,6 +474,7 @@ export default Plugin.define({
             if (store) {
               const started = await startWorkflow(registry, store, workflowId, workflowArgs, {
                 workspace: workspaceBinding,
+                ...gateOptions,
               })
               return {
                 output:
@@ -498,7 +499,6 @@ export default Plugin.define({
             }
           } finally {
             workflowDepth -= 1
-            gateRestore?.()
           }
         },
       })
@@ -577,6 +577,9 @@ export default Plugin.define({
           "- checkpoint: approval-gate message template\n" +
           "- verify: { artifact: \"{{steps.<name>}}\", criteria?: string } semantic review\n" +
           "- fileExists: relative path assertion (workspace root)\n" +
+          "- subflow: \"flow-id\" to nest another registered workflow as a step " +
+          "(optional args: object of primitives/templates; requires journalDir; " +
+          "max nesting depth 3; the subflow output feeds {{steps.<name>}})\n" +
           "Rules: unknown template variable = step failure; changing steps " +
           "requires bumping version; built-in ids (smoke/reliable/artifact/" +
           "feature-development) are reserved.",
@@ -680,22 +683,15 @@ export default Plugin.define({
                   "another workflow run is live in this process (single-flight)",
                 )
               }
-              // 无人值守：换 auto-approve 策略门；run 落定（或启动失败）后恢复
-              const savedGate = getCheckpointGate()
-              setCheckpointGate(new PolicyCheckpointGate("auto-approve"))
-              let detached: DetachedWorkflowRun
-              try {
-                detached = await startWorkflowDetached(
-                  registry,
-                  journalStore,
-                  schedule.flow,
-                  schedule.args ?? {},
-                  {},
-                )
-              } catch (error) {
-                setCheckpointGate(savedGate)
-                throw error
-              }
+              // 无人值守：P2-9 起经 RunLaunchOptions.gate 给本次 run 注入
+              // auto-approve 策略门（run 级，无换装/恢复竞态）
+              const detached = await startWorkflowDetached(
+                registry,
+                journalStore,
+                schedule.flow,
+                schedule.args ?? {},
+                { gate: new PolicyCheckpointGate("auto-approve") },
+              )
               // 终态映射：completion 成功 -> success；失败/中止 -> journal 权威状态
               const completion = detached.completion.then(
                 () => "success" as const,
@@ -704,7 +700,6 @@ export default Plugin.define({
                   return run?.status === "aborted" ? ("aborted" as const) : ("failed" as const)
                 },
               )
-              void detached.completion.finally(() => setCheckpointGate(savedGate))
               return { runId: detached.runId, completion }
             },
           })

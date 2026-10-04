@@ -19,8 +19,9 @@
 import type { WorkflowIdentity } from "../state/journal.js"
 import { RunJournal } from "../state/recorder.js"
 import type { ExecutionStore } from "../state/store.js"
+import type { CheckpointGate } from "../quality/checkpoint.js"
+import { runWith, currentRunContext } from "../runtime/run-context.js"
 import {
-  setCurrentWorkspace,
   type CleanupPolicy,
   type WorkspaceHandle,
   type WorkspaceOptions,
@@ -36,6 +37,19 @@ import type { WorkflowRegistry } from "./registry.js"
 import { WorkflowArgsError, WorkflowExecutionError } from "./errors.js"
 import { validateArgs } from "./schema.js"
 import { RunAbortedError, clearLive, markLive, throwIfCancelled } from "./run-control.js"
+
+/** subflow 嵌套深度上限（顶层 depth=0；防御失控递归，对齐 v1 事故教训） */
+export const MAX_SUBFLOW_DEPTH = 3
+
+/** 启动选项（start / detached / resume 共用） */
+export interface RunLaunchOptions {
+  workspace?: WorkspaceBinding
+  /**
+   * P2-9 本 run 的 checkpoint gate（scheduler 无人值守 / 调用级覆盖用）。
+   * 缺省继承当前 run 上下文（subflow）或回落全局绑定。
+   */
+  gate?: CheckpointGate
+}
 
 export interface WorkflowRunResult {
   runId: string
@@ -60,6 +74,7 @@ function createContext(input: {
   mode: "start" | "resume"
   journal?: RunJournal
   store?: ExecutionStore
+  registry?: WorkflowRegistry
   workspaceRoot?: string
 }): WorkflowContext {
   return {
@@ -70,6 +85,33 @@ function createContext(input: {
     journal: input.mode === "start" ? input.journal : undefined,
     // P2.7：隔离工作区根目录（未启用隔离时为 undefined）
     workspaceRoot: input.workspaceRoot,
+    // P2-9 subflow：需要 registry + store（未配置 journalDir 的 run 不提供）
+    ...(input.registry !== undefined && input.store !== undefined
+      ? {
+          subflow: async <TArgs>(
+            id: string,
+            args?: TArgs,
+            options?: { version?: string },
+          ) => {
+            const parent = currentRunContext()
+            const depth = (parent?.depth ?? 0) + 1
+            if (depth > MAX_SUBFLOW_DEPTH) {
+              throw new Error(
+                `[agentic-workflow] subflow nesting too deep: depth ${depth} > ` +
+                  `${MAX_SUBFLOW_DEPTH} (parent run ${input.runId} -> ${id}); ` +
+                  "flatten the workflow composition",
+              )
+            }
+            const registry = input.registry as WorkflowRegistry
+            const store = input.store as ExecutionStore
+            // gate/workspace 经 ALS 继承父作用域；lineage 由 runToCompletion 推导
+            const result = await startWorkflow(registry, store, id, args ?? {}, {
+              ...(options?.version !== undefined ? { version: options.version } : {}),
+            })
+            return { runId: result.runId, output: result.output }
+          },
+        }
+      : {}),
     runSteps(steps, options) {
       // P1-3 协作式取消：每个步骤执行前检查 stop 标记（正在执行的
       // LLM 调用不打断，下一个边界生效并收口 aborted）
@@ -184,6 +226,7 @@ interface BegunRun {
   journal: RunJournal
   runId: string
   store: ExecutionStore
+  registry: WorkflowRegistry
   cleanupPolicy: CleanupPolicy
 }
 
@@ -201,11 +244,16 @@ async function beginRun(
     throw new WorkflowArgsError(definition.id, problems)
   }
   const identity: WorkflowIdentity = { id: definition.id, version: definition.version }
+  // P2-9 lineage：subflow 在父 run 作用域内发起时自动指回父 run；
+  // 深度同式推导（与 runToCompletion 的 ALS 深度一致）
+  const parent = currentRunContext()
   const journal = await RunJournal.start(store, {
     workflow: identity,
     args,
     stepNames: definition.stepNames,
     stepCount: definition.stepNames?.length ?? 0,
+    ...(parent !== undefined ? { parentRunId: parent.runId } : {}),
+    ...(parent !== undefined ? { depth: parent.depth + 1 } : {}),
   })
   return {
     definition,
@@ -213,6 +261,7 @@ async function beginRun(
     journal,
     runId: journal.run.runId,
     store,
+    registry,
     cleanupPolicy: options?.workspace?.cleanup ?? "on-success",
   }
 }
@@ -221,10 +270,12 @@ async function beginRun(
 async function runToCompletion(
   begun: BegunRun,
   args: unknown,
-  options?: { workspace?: WorkspaceBinding },
+  options?: RunLaunchOptions,
 ): Promise<WorkflowRunResult> {
   const { definition, identity, journal, runId, store, cleanupPolicy } = begun
   markLive(runId)
+  // P2-9：发起时刻的 run 上下文（subflow 子 run = 父作用域；顶层/scheduled = 空）
+  const parent = currentRunContext()
   let workspace: WorkspaceHandle | undefined
   try {
     // P2.7：创建隔离工作区并把身份落 journal（resume attach 依据）
@@ -232,23 +283,48 @@ async function runToCompletion(
       workspace = await options.workspace.provider.create(runId, options.workspace.options)
       await journal.setWorkspace(workspace.identity)
     }
-    setCurrentWorkspace(workspace)
-    try {
-      const result = await definition.run(
-        args as never,
-        createContext({ runId, mode: "start", journal, workspaceRoot: workspace?.root }),
-      )
-      // 顺序纪律：先收口 journal 再清理 workspace——cleanupWorkspace 会经
-      // attach 重读持久化状态并清除 workspace 字段，若 complete() 在其后，
-      // 内存 journal 会把已删除的 worktree 身份复活写回（幂等 resume 即坏）
-      if (journal.run.status === "running") {
-        await journal.complete()
-      }
-      await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
-      return { runId, workflow: identity, output: toOutput(result) }
-    } finally {
-      setCurrentWorkspace(undefined)
+    // P2-9 run 级上下文：gate 按选项 > 父作用域继承 > 全局绑定回落（读取方实现）；
+    // workspace 本 run 创建的优先，否则继承父作用域（subflow 子 agent cwd =
+    // 父 run 工作区）；depth/lineage 由父作用域推导
+    const result = await runWith(
+      {
+        runId,
+        workflow: identity,
+        ...(options?.gate !== undefined
+          ? { gate: options.gate }
+          : parent?.gate !== undefined
+            ? { gate: parent.gate }
+            : {}),
+        ...(workspace !== undefined
+          ? { workspace }
+          : parent?.workspace !== undefined
+            ? { workspace: parent.workspace }
+            : {}),
+        // 顶层 run depth=0；subflow 子 run = 父 depth + 1
+        depth: parent !== undefined ? parent.depth + 1 : 0,
+        ...(parent !== undefined ? { parentRunId: parent.runId } : {}),
+      },
+      () =>
+        definition.run(
+          args as never,
+          createContext({
+            runId,
+            mode: "start",
+            journal,
+            store,
+            registry: begun.registry,
+            workspaceRoot: (workspace ?? parent?.workspace)?.root,
+          }),
+        ),
+    )
+    // 顺序纪律：先收口 journal 再清理 workspace——cleanupWorkspace 会经
+    // attach 重读持久化状态并清除 workspace 字段，若 complete() 在其后，
+    // 内存 journal 会把已删除的 worktree 身份复活写回（幂等 resume 即坏）
+    if (journal.run.status === "running") {
+      await journal.complete()
     }
+    await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
+    return { runId, workflow: identity, output: toOutput(result) }
   } catch (error) {
     // P1-3：用户协作式停止 -> aborted（与失败可区分：主动停 ≠ 出错）；
     // 其余失败 -> failed。两者都清理失败现场并统一抛 WorkflowExecutionError
@@ -272,7 +348,7 @@ export async function startWorkflow(
   store: ExecutionStore,
   id: string,
   args: unknown,
-  options?: { version?: string; workspace?: WorkspaceBinding },
+  options?: { version?: string } & RunLaunchOptions,
 ): Promise<WorkflowRunResult> {
   const begun = await beginRun(registry, store, id, args, options)
   return runToCompletion(begun, args, options)
@@ -295,7 +371,7 @@ export async function startWorkflowDetached(
   store: ExecutionStore,
   id: string,
   args: unknown,
-  options?: { version?: string; workspace?: WorkspaceBinding },
+  options?: { version?: string } & RunLaunchOptions,
 ): Promise<DetachedWorkflowRun> {
   const begun = await beginRun(registry, store, id, args, options)
   return {
@@ -317,7 +393,7 @@ export async function resumeWorkflow(
   registry: WorkflowRegistry,
   store: ExecutionStore,
   runId: string,
-  options?: { workspace?: WorkspaceBinding },
+  options?: RunLaunchOptions,
 ): Promise<WorkflowRunResult> {
   const run = await store.getRun(runId)
   if (!run) {
@@ -333,20 +409,33 @@ export async function resumeWorkflow(
     if (options?.workspace && run.workspace) {
       workspace = await options.workspace.provider.attach(run.workspace)
     }
-    setCurrentWorkspace(workspace)
-    try {
-      const result = await definition.run(
-        run.args as never,
-        createContext({ runId, mode: "resume", store, workspaceRoot: workspace?.root }),
-      )
-      // 同 start：先收口 journal（settle），再清理 workspace（clearWorkspace
-      // 允许在收口后执行——幂等 resume 依赖清理后字段被清掉）
-      await settleAfterSuccess(store, runId)
-      await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
-      return { runId, workflow: identity, output: toOutput(result) }
-    } finally {
-      setCurrentWorkspace(undefined)
-    }
+    // P2-9：resume 独立成 run（深度重置 0；lineage 已在 journal 里，
+    // 不因 resume 重建）。gate 同 start：选项优先，回落全局绑定。
+    const result = await runWith(
+      {
+        runId,
+        workflow: identity,
+        ...(options?.gate !== undefined ? { gate: options.gate } : {}),
+        ...(workspace !== undefined ? { workspace } : {}),
+        depth: 0,
+      },
+      () =>
+        definition.run(
+          run.args as never,
+          createContext({
+            runId,
+            mode: "resume",
+            store,
+            registry,
+            workspaceRoot: workspace?.root,
+          }),
+        ),
+    )
+    // 同 start：先收口 journal（settle），再清理 workspace（clearWorkspace
+    // 允许在收口后执行——幂等 resume 依赖清理后字段被清掉）
+    await settleAfterSuccess(store, runId)
+    await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
+    return { runId, workflow: identity, output: toOutput(result) }
   } catch (error) {
     // P1-3：resume 途中被 stop -> aborted（其余失败维持 failed 语义）
     if (error instanceof RunAbortedError) {

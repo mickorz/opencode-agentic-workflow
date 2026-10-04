@@ -33,6 +33,10 @@ export interface JournalStartInput {
   stepCount: number
   /** 显式 runId（缺省自动生成） */
   runId?: string
+  /** 父 run（P2-9 subflow lineage；顶层 run 省略） */
+  parentRunId?: string
+  /** 嵌套深度（P2-9；顶层 0） */
+  depth?: number
 }
 
 /** run -> 进度快照（P2-8 数据源；不含步骤 output，失败摘要截断 200 字符） */
@@ -46,6 +50,8 @@ export function toProgressSnapshot(run: WorkflowRun): RunProgressSnapshot {
     ...(run.failure !== undefined
       ? { failure: run.failure.message.slice(0, 200) }
       : {}),
+    ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
+    ...(run.depth !== undefined ? { depth: run.depth } : {}),
     steps: run.steps.map((step) => ({
       index: step.index,
       ...(step.name !== undefined ? { name: step.name } : {}),

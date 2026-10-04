@@ -50,9 +50,12 @@ description: >
 }
 ```
 
-**步骤四类**（每步恰好一个步骤键）：`agent`（子 agent）、`checkpoint`（人工
+**步骤五类**（每步恰好一个步骤键）：`agent`（子 agent）、`checkpoint`（人工
 审批门）、`verify`（语义评审；可加 `threshold` 投票与 `lenses` 多视角）、
-`fileExists`（文件存在断言，相对项目根）。
+`fileExists`（文件存在断言，相对项目根）、`subflow`（嵌套另一个已注册
+workflow；`"subflow": "flow-id"` + 可选 `args` 对象（原始值或模板）；需要
+journalDir；嵌套深度上限 3；子 run 的输出进 `{{steps.<名>}}`，子 run 失败按
+普通步骤失败处理）。
 
 **必守纪律（违反 = 事故）**：
 
@@ -92,7 +95,9 @@ description: >
 
 | 报错 | 原因与修法 |
 |------|-----------|
-| `must have exactly one of agent/checkpoint/verify/fileExists` | 一步给了两个步骤键，或忘了给 |
+| `must have exactly one of agent/checkpoint/verify/fileExists/subflow` | 一步给了两个步骤键，或忘了给 |
+| `subflow step "..." requires the journalDir` | subflow 需要插件配置 journalDir（lineage 落盘）；配置后重试 |
+| `subflow nesting too deep` | 嵌套超 3 层；拍平组合方式 |
 | `template variable {{...}} is not provided` | 调用没传该参数，或 args 没声明 |
 | `already registered with DIFFERENT content` | 升 version 再 workflow_define |
 | `id "..." is reserved by a built-in` | 换个 id |

@@ -106,3 +106,34 @@ test("renderPanelLines: maxWidth 截断加省略号（标题行不截断）", ()
   assert.ok(lines.slice(1).every((l) => l.length <= 10))
   assert.ok(lines[1]?.endsWith("…"))
 })
+
+test("P2-9 lineage：subflow 子 run 缩进挂在父 run 下（深度感知 + 失败摘要）", () => {
+  const parent = snapshot({ runId: "run_p", startedAt: 5000, status: "running" })
+  const child = snapshot({
+    runId: "run_c",
+    startedAt: 6000,
+    status: "failed",
+    completedAt: 8000,
+    failure: "child exploded",
+    parentRunId: "run_p",
+    depth: 1,
+  })
+  const grandchild = snapshot({
+    runId: "run_g",
+    startedAt: 7000,
+    status: "running",
+    parentRunId: "run_c",
+    depth: 2,
+  })
+  const lines = renderPanelLines([parent, child, grandchild], NOW)
+  assert.deepEqual(lines, [
+    "Agentic Workflow",
+    "▶ feature-development@1.0.0  5.0s",
+    "  ✓ gather  2.0s",
+    "  ▶ implement  3.5s",
+    "  · verify",
+    "    ↳ ✗ feature-development@1.0.0  2.0s · subflow",
+    "      ↳ child exploded",
+    "        ↳ ▶ feature-development@1.0.0  3.0s ⇢ subflow",
+  ])
+})

@@ -42,6 +42,17 @@ export interface WorkflowContext {
   workspaceRoot?: string
   /** 编排步骤的统一入口（自动处理 start/resume 与 journal 记录） */
   runSteps<T>(steps: Array<StepFn<T>>, options?: RunStepsOptions): Promise<T | undefined>
+  /**
+   * P2-9 子工作流：在本 run 内同步运行另一个已注册 workflow。
+   * 子 run 有独立 journal（parentRunId 指回本 run）；gate/workspace 继承
+   * 本 run 作用域；嵌套深度上限 3（防失控递归）。需要 journalDir——
+   * 未配置 ExecutionStore 的 run 不提供此方法（undefined）。
+   */
+  subflow?<TArgs = unknown>(
+    id: string,
+    args?: TArgs,
+    options?: { version?: string },
+  ): Promise<{ runId: string; output: string }>
 }
 
 export interface RunStepsOptions {

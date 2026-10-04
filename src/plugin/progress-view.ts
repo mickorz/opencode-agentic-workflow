@@ -97,7 +97,8 @@ function truncate(line: string, maxWidth: number | undefined): string {
 }
 
 /**
- * 整板 -> 展示行（最新 run 展开步骤树，其余收为一行摘要）。
+ * 整板 -> 展示行（最新顶层 run 展开步骤树，其余收为一行摘要；
+ * subflow 子 run 按 parentRunId 缩进挂在父 run 下，深度再加两格）。
  * 面板组件逐行渲染；单测直接断言行内容。
  */
 export function renderPanelLines(
@@ -108,20 +109,56 @@ export function renderPanelLines(
   if (runs.length === 0) {
     return ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
   }
+  // P2-9 lineage：父子分组（父不在板上的孤儿按顶层渲染）
+  const byId = new Set(runs.map((r) => r.runId))
+  const childrenOf = new Map<string, RunProgressSnapshot[]>()
+  const topLevels: RunProgressSnapshot[] = []
+  for (const run of runs) {
+    if (run.parentRunId !== undefined && byId.has(run.parentRunId)) {
+      const list = childrenOf.get(run.parentRunId) ?? []
+      list.push(run)
+      childrenOf.set(run.parentRunId, list)
+    } else {
+      topLevels.push(run)
+    }
+  }
+
   const expanded = options?.expandedRuns ?? 1
   const lines: string[] = ["Agentic Workflow"]
-  runs.forEach((run, i) => {
+
+  /** 递归渲染一棵 run 树：本体 + 其 subflow 子孙（缩进随深度） */
+  const emitRun = (run: RunProgressSnapshot, topLevelIndex: number): void => {
     const vm = toRunViewModel(run, now)
-    lines.push(truncate(`${vm.glyph} ${vm.title}  ${vm.duration}`, options?.maxWidth))
-    if (i < expanded) {
-      for (const step of vm.steps) {
-        const duration = step.duration ? `  ${step.duration}` : ""
-        lines.push(truncate(`  ${step.glyph} ${step.label}${duration}`, options?.maxWidth))
+    const isTop = run.parentRunId === undefined
+    if (isTop) {
+      lines.push(truncate(`${vm.glyph} ${vm.title}  ${vm.duration}`, options?.maxWidth))
+      if (topLevelIndex < expanded) {
+        for (const step of vm.steps) {
+          const duration = step.duration ? `  ${step.duration}` : ""
+          lines.push(truncate(`  ${step.glyph} ${step.label}${duration}`, options?.maxWidth))
+        }
+        if (vm.failure) {
+          lines.push(truncate(`  ↳ ${vm.failure}`, options?.maxWidth))
+        }
       }
+    } else {
+      const indent = "    ".repeat(Math.min(run.depth ?? 1, 3))
+      const lineage = run.status === "running" ? " ⇢ subflow" : " · subflow"
+      lines.push(
+        truncate(
+          `${indent}↳ ${vm.glyph} ${vm.title}  ${vm.duration}${lineage}`,
+          options?.maxWidth,
+        ),
+      )
       if (vm.failure) {
-        lines.push(truncate(`  ↳ ${vm.failure}`, options?.maxWidth))
+        lines.push(truncate(`${indent}  ↳ ${vm.failure}`, options?.maxWidth))
       }
     }
-  })
+    for (const child of childrenOf.get(run.runId) ?? []) {
+      emitRun(child, topLevelIndex)
+    }
+  }
+
+  topLevels.forEach((run, i) => emitRun(run, i))
   return lines
 }

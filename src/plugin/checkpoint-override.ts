@@ -7,19 +7,15 @@
  * 交互门（5 分钟超时假失败）+ 观测数据写进别的项目。
  *
  * 修复策略：**运行时显式 > 环境隐式**。workflow 工具新增保留参数
- * `checkpointMode`，调用时显式覆盖本次运行的审批门，结束恢复原绑定。
- * 对守护进程宿主天然免疫（参数随调用走，不依赖 init 快照）。
+ * `checkpointMode`，调用时为**本次 run** 构建策略门，经 P2-9 的
+ * run 级上下文（RunLaunchOptions.gate）注入——不再换装全局门，
+ * 无恢复交叠竞态，对守护进程宿主与并发调用天然免疫。
  *
  * 范围收敛（v0.4.0）：只支持策略门（auto-approve / auto-reject）——
  * interactive 门需要 RPC 域 + bind() 注册，按调用创建会累积 RPC
  * 注册且无 unbind 通道，保持「仅限插件配置」。
- *
- * 已知限制：全局 gate 仍是单例，两个并发调用携带不同覆盖值时存在
- * 竞态（restore 交叠）。per-run gate 线程化是后续 L 范围工作；
- * 单会话 `opencode run` / TUI 串行场景不受影响。
  */
 
-import { getCheckpointGate, setCheckpointGate } from "../quality/checkpoint.js"
 import { PolicyCheckpointGate } from "./policy-checkpoint-gate.js"
 
 /** 可作为调用级覆盖的审批模式（策略门子集） */
@@ -44,18 +40,16 @@ export function parseCheckpointModeOverride(
 }
 
 /**
- * 为**本次**调用绑定覆盖门；返回恢复函数（无覆盖时返回 undefined）。
- * 必须在 finally 中调用恢复函数，防止覆盖泄漏到后续调用。
+ * 为本次调用构建覆盖门（无覆盖返回 undefined——run 走默认 gate 链：
+ * run 上下文继承 / 全局绑定）。
  */
-export function applyCheckpointModeOverride(
+export function buildCheckpointGate(
   mode: CheckpointModeOverride | undefined,
-): (() => void) | undefined {
+): PolicyCheckpointGate | undefined {
   if (!mode) return undefined
-  const previous = getCheckpointGate()
-  setCheckpointGate(new PolicyCheckpointGate(mode))
   console.log(
-    `[agentic-workflow] checkpoint gate override for this invocation: ${mode} ` +
+    `[agentic-workflow] checkpoint gate for this run: ${mode} ` +
       "(explicit per-call control; init-time config may differ)",
   )
-  return () => setCheckpointGate(previous)
+  return new PolicyCheckpointGate(mode)
 }

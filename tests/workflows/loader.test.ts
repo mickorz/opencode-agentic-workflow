@@ -248,3 +248,94 @@ test("run：fileExists 在 workspaceRoot 下不存在 → 步骤失败；模板�
   const def2 = (await loadDeclarativeWorkflows([path.join(baseDir, "need-args.json")], baseDir)).definitions[0]!
   await assert.rejects(() => runDefinition(def2, {}, emptyDir), /args\.subject.*is not provided/)
 })
+
+test("P2-9 校验：subflow 步合法（args 原始值/模板混合）；未知键/坏 args 拒绝", async () => {
+  await writeWorkflow("sub-ok.json", {
+    id: "sub-ok",
+    steps: [
+      { name: "prep", agent: "准备 {{topic}}" },
+      { name: "child", subflow: "child-flow", args: { topic: "{{topic}}", count: 3, flag: true } },
+    ],
+  })
+  const ok = await loadDeclarativeWorkflows([path.join(baseDir, "sub-ok.json")], baseDir)
+  assert.equal(ok.errors.length, 0)
+  assert.equal(ok.definitions[0]?.id, "sub-ok")
+
+  // args 非对象
+  await writeWorkflow("sub-bad-args.json", {
+    id: "sub-bad-args",
+    steps: [{ name: "child", subflow: "c", args: ["nope"] }],
+  })
+  const bad1 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-args.json")], baseDir)
+  assert.match(bad1.errors[0] ?? "", /args must be an object/)
+
+  // args 值类型非法
+  await writeWorkflow("sub-bad-val.json", {
+    id: "sub-bad-val",
+    steps: [{ name: "child", subflow: "c", args: { nested: { deep: 1 } } }],
+  })
+  const bad2 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-val.json")], baseDir)
+  assert.match(bad2.errors[0] ?? "", /args\.nested must be a string/)
+
+  // subflow 步上放了 agent 专属键
+  await writeWorkflow("sub-bad-key.json", {
+    id: "sub-bad-key",
+    steps: [{ name: "child", subflow: "c", model: "glm/x" }],
+  })
+  const bad3 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-key.json")], baseDir)
+  assert.match(bad3.errors[0] ?? "", /unknown key\(s\) \[model\]/)
+})
+
+test("P2-9 执行：subflow 步模板解析 + 输出进 {{steps.child}}", async () => {
+  const echo = new EchoExecutor()
+  setExecutor(echo)
+  await writeWorkflow("sub-run.json", {
+    id: "sub-run",
+    steps: [
+      { name: "prep", agent: "准备 {{topic}}" },
+      { name: "child", subflow: "child-flow", args: { topic: "子任务-{{topic}}" } },
+      { name: "after", agent: "总结：{{steps.child}}" },
+    ],
+  })
+  const def = (await loadDeclarativeWorkflows([path.join(baseDir, "sub-run.json")], baseDir)).definitions[0]!
+
+  const calls: Array<{ id: string; args: Record<string, unknown> }> = []
+  let state: Record<string, unknown> | undefined
+  const ctx = {
+    workspaceRoot: baseDir,
+    subflow: async (id: string, args: Record<string, unknown>) => {
+      calls.push({ id, args })
+      return { runId: "run_child", output: `child-done(${String(args.topic)})` }
+    },
+    runSteps: async (steps: Array<(prev?: Record<string, unknown>) => Promise<Record<string, unknown>>>, options?: { stepNames?: string[] }) => {
+      state = await sequence(steps, options as { stepNames?: string[] })
+      return state
+    },
+  }
+  const result = await def.run({ topic: "T9" }, ctx)
+
+  // 模板注入 subflow args；输出回流 steps 模板
+  assert.deepEqual(calls, [{ id: "child-flow", args: { topic: "子任务-T9" } }])
+  assert.equal(state?.child, "child-done(子任务-T9)")
+  assert.match(echo.prompts[1]!, /总结：child-done/)
+
+  // output 缺省取最后一个 agent 步（含 subflow 输出注入）
+  assert.match(result.output, /^echo:/)
+})
+
+test("P2-9 执行：ctx.subflow 缺失（未配 journalDir）→ 清晰报错", async () => {
+  const echo = new EchoExecutor()
+  setExecutor(echo)
+  await writeWorkflow("sub-nostore.json", {
+    id: "sub-nostore",
+    steps: [{ name: "child", subflow: "child-flow" }],
+  })
+  const def = (await loadDeclarativeWorkflows([path.join(baseDir, "sub-nostore.json")], baseDir)).definitions[0]!
+  const ctx = {
+    workspaceRoot: baseDir,
+    runSteps: async (steps: Array<(prev?: Record<string, unknown>) => Promise<Record<string, unknown>>>) => {
+      return sequence(steps as never)
+    },
+  }
+  await assert.rejects(() => def.run({}, ctx), /subflow step "child" requires the journalDir/)
+})

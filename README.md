@@ -401,6 +401,55 @@ journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RP
 注意：面板渲染属交互式 TUI 行为，需在真实 TUI 里人工确认（本仓库自动化覆盖到
 server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E 证据）。
 
+## 嵌套工作流（subflow）
+
+P2-9 起支持把另一个已注册 workflow 作为步骤运行（v1 的 `workflow()` 原语对位）。
+两条路：
+
+**声明式**——步骤键 `subflow`（五类互斥键之一）：
+
+```jsonc
+{
+  "id": "release-orchestrator",
+  "version": "1.0.0",
+  "steps": [
+    { "name": "notes", "subflow": "release-notes", "args": { "topic": "{{topic}}" } },
+    { "name": "gate", "checkpoint": "发布说明已生成（{{steps.notes}}），批准？" }
+  ],
+  "output": "orchestrated: {{steps.notes}}"
+}
+```
+
+**代码式**——definition 内 `ctx.subflow(id, args)`：
+
+```ts
+defineWorkflow({
+  id: "my-orchestrator",
+  version: "1.0.0",
+  stepNames: ["child"],
+  async run(args, ctx) {
+    const child = await ctx.subflow!("release-notes", { topic: args.topic })
+    return { output: child.output }
+  },
+})
+```
+
+语义：
+
+- **子 run 独立 journal**：`parentRunId`/`depth` 记录 lineage；进度面板把子 run
+  缩进挂在父 run 下；子 run 失败按普通步骤失败处理（父 run fail-fast）
+- **gate/workspace 继承**：子 run 走父 run 的审批门与工作区（隔离是顶层
+  run 的属性；子 agent 的 cwd 落在父 run 的 worktree）
+- **深度上限 3**：超出明确报错（防失控递归；v1 自饿死事故的教训）
+- **依赖 journalDir**：subflow run 必须有 journal（lineage 落盘）；未配置时
+  声明式步骤给出清晰报错、代码式 ctx 不提供该方法
+- agent 步骤里的递归守卫不变：workflow 内的 agent 不能再调 workflow_start
+  （那会绕过编排）；要组合流程就用 subflow
+
+同一机制也顺带解决了 0.4.0 的已知限制「全局 gate 单例竞态」：checkpoint
+gate 与 workspace 现在经 run 级上下文（AsyncLocalStorage）解析，
+scheduler 的无人值守门与 `checkpointMode` 调用级覆盖都不再换装全局单例。
+
 ## Journal 数据模型
 
 `<journalDir>/<runId>.json`（每次状态变更原子落盘）：
@@ -411,6 +460,8 @@ server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E �
   "workflow": { "id": "artifact", "version": "1.0.0" },  // resume 精确版本解析依据
   "args": { "topic": "火星基地能源方案" },
   "workspace": { "provider": "git-worktree", "path": "...", "branch": "agw/run_..." },
+  "parentRunId": "run_1790994700000_xxxx",  // P2-9 lineage：subflow 子 run 指回父 run（顶层无）
+  "depth": 1,                                // 嵌套深度（顶层 0）
   "status": "failed",            // running / completed / failed / aborted
   "steps": [
     { "name": "write",      "status": "completed", "startedAt": 1760000000000 },
@@ -433,7 +484,7 @@ server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E �
 | 平台 | OpenCode **V1** 插件 API | OpenCode **V2** 插件 API |
 | workflow 形态 | 主 agent **运行时生成 JS 编排脚本**（VM 沙箱） | **声明式定义** + 语义版本注册（代码内） |
 | 调用方式 | 自然语言 → 生成脚本 → 执行 | `flow=<id>` + args（或 `resumeRunId`） |
-| 原语 | agent / parallel / sequence / fallback / race | agent / parallel / sequence / phase + check / verify / checkpoint |
+| 原语 | agent / parallel / sequence / fallback / race | agent / parallel / sequence / phase + check / verify / checkpoint + **subflow** |
 | 崩溃恢复 | 无 | journal + resume（completed 跳过、精确版本、幂等重放） |
 | 隔离 | 子会话 | git worktree per run（resume reattach） |
 | 观测 | TUI 进度树 | events.jsonl trace + metrics/成本聚合 |
@@ -446,7 +497,8 @@ server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E �
    中固化为 `WorkflowDefinition`（`src/workflows/` 有三个完整样例）。换来的是
    可恢复、可版本化、可审计。
 2. **一次性的动态编排仍有价值**：不需要 durable 的临时任务，直接让主 agent
-   自己并行开子会话完成即可（v2 明确拒绝嵌套 workflow 调用防递归死锁）。
+   自己并行开子会话完成即可（workflow 内的 agent 仍不可再调 workflow 工具；
+   流程级组合用 subflow 步骤 / ctx.subflow，见「嵌套工作流」一节）。
 3. OpenCode 平台自身 V1→V2 的配置/插件迁移见
    `dev-docs/guides/Migrate from V1.md`（官方指南剪藏）。
 

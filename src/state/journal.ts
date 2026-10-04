@@ -68,6 +68,13 @@ export interface WorkflowRun {
    * 清理完成后置 undefined（见 RunJournal.clearWorkspace）。
    */
   workspace?: WorkspaceIdentity
+  /**
+   * 父 run 的 runId（P2-9 subflow lineage）：subflow 子 run 指回发起它的
+   * 父 run；顶层 run 无此字段。跨 run 关系查询/进度树分组依据。
+   */
+  parentRunId?: string
+  /** P2-9 嵌套深度：顶层 0，subflow 子 run = 父 + 1（展示缩进用） */
+  depth?: number
   /** 失败/中断原因（run 级别） */
   failure?: StepErrorRecord
   steps: StepRecord[]
@@ -99,6 +106,10 @@ export function createRun(input: {
   args?: unknown
   stepNames?: string[]
   stepCount: number
+  /** 父 run（P2-9 subflow lineage；顶层 run 省略） */
+  parentRunId?: string
+  /** 嵌套深度（P2-9；顶层 0） */
+  depth?: number
 }): WorkflowRun {
   if (!Number.isInteger(input.stepCount) || input.stepCount < 0) {
     throw new Error(`stepCount must be a non-negative integer, got ${input.stepCount}`)
@@ -116,6 +127,8 @@ export function createRun(input: {
     currentStep: -1,
     startedAt: Date.now(),
     args: input.args,
+    ...(input.parentRunId !== undefined ? { parentRunId: input.parentRunId } : {}),
+    ...(input.depth !== undefined ? { depth: input.depth } : {}),
     steps: Array.from({ length: input.stepCount }, (_, index) => ({
       index,
       name: input.stepNames?.[index],

@@ -14,6 +14,7 @@
 import { WorkflowError } from "../runtime/errors.js"
 import { emitEvent } from "../observability/events.js"
 import { phase } from "../workflow/phase.js"
+import { currentRunContext } from "../runtime/run-context.js"
 
 export interface CheckpointRequest {
   label: string
@@ -50,28 +51,32 @@ export interface CheckpointOptions {
   label?: string
 }
 
-/** ---- gate 注册（与 engine 的 executor 注入同构） ---- */
+/** ---- gate 注册（P2-9 起支持 run 级覆盖，ALS 优先） ---- */
 
 let gate: CheckpointGate | undefined
 
-/** 注入 CheckpointGate（plugin 初始化时调用；传 undefined 表示解除绑定） */
+/** 注入全局 CheckpointGate（plugin 初始化时调用；传 undefined 表示解除绑定） */
 export function setCheckpointGate(value: CheckpointGate | undefined): void {
   gate = value
 }
 
-/** 读取当前 gate（调用级覆盖需先保存原值以便恢复） */
+/**
+ * 当前生效的 gate：run 上下文（subflow/scheduler/调用级覆盖）优先，
+ * 回落全局绑定。嵌套 run 未显式覆盖时继承父作用域。
+ */
 export function getCheckpointGate(): CheckpointGate | undefined {
-  return gate
+  return currentRunContext()?.gate ?? gate
 }
 
 /** 获取当前 gate；未注入时抛错 */
 export function requireCheckpointGate(): CheckpointGate {
-  if (!gate) {
+  const current = getCheckpointGate()
+  if (!current) {
     throw new Error(
       "[agentic-workflow] no checkpoint gate bound: call setCheckpointGate() first",
     )
   }
-  return gate
+  return current
 }
 
 /**

@@ -104,10 +104,20 @@
    @opentui 0.5.14，v1 双实例教训）。节点详情/模型 token 元数据/Open Session
    回放未做（快照刻意不带 output；后续可加 journal 详情 RPC）；面板视觉需
    交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配）。
-9. **嵌套工作流**（L，架构前置）——v1：原生 `workflow()` 原语 + lineage。v2：
-   递归守卫**显式禁止**（自饿死事故）。前置：checkpoint gate / executor 的
-   per-run 化——与 0.4.0 已知限制「全局 gate 单例竞态」同根，是同一个 L 范围
-   架构工作，宜一并设计。
+9. ~~**嵌套工作流**（L，架构前置）~~ **已闭环（2026-10-06，P2-9）**——
+   架构前置先行落地：checkpoint gate / workspace 从模块级单例改为
+   **run 级上下文**（AsyncLocalStorage；executor 保持全局——从不按 run
+   换绑，无踩踏面）。runner 在执行体外套 runWith；读取方 ALS 优先、
+   回落全局（单 run 行为不变，298 项存量测试全绿验证中性）。副产品：
+   0.4.0 已知限制「全局 gate 单例竞态」消除——scheduler 无人值守门与
+   checkpointMode 调用级覆盖改为 RunLaunchOptions.gate 注入（换装/恢复
+   代码删除）。subflow 原语：代码式 ctx.subflow(id, args) + 声明式
+   subflow 步骤键（args 支持模板）；子 run 独立 journal（parentRunId/
+   depth lineage）；gate/workspace 继承父作用域；深度上限 3；失败按
+   步骤 fail-fast 传播；TUI 进度树按 lineage 缩进渲染。E2E：声明式
+   parent→subflow child 真机跑通（双 journal completed + lineage +
+   depth + 双流 run.progress 事件）。测试 → **308/308**。
+   v1 的 Open Session 回放/节点 token 元数据详情仍未做（P2-8 遗留同源）。
 10. **Installer CLI**（S~M，等数据）——v1：`npx install/uninstall/update/doctor`
     （配置合并 + .bak + skills 安装）。v2：手改 opencode.json（README 已验证可行）。
     是否值得做等外部测试的安装卡点反馈。

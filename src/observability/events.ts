@@ -77,6 +77,10 @@ export interface RunProgressSnapshot {
   completedAt?: number
   /** run 级失败摘要（截断 200 字符） */
   failure?: string
+  /** P2-9 lineage：subflow 子 run 指回父 run；顶层 run 无 */
+  parentRunId?: string
+  /** P2-9 嵌套深度：顶层 0，subflow 子 run = 父 + 1 */
+  depth?: number
   steps: Array<{
     index: number
     name?: string

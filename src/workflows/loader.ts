@@ -3,7 +3,7 @@
  *
  * 装载契约（详见 dev-docs/planning/P4-custom-workflows.md）：
  *   - 入口：.json 文件路径 或 目录（扫一层 *.json）；相对项目目录
- *   - 步骤四类（互斥键）：agent / checkpoint / verify / fileExists
+ *   - 步骤五类（互斥键）：agent / checkpoint / verify / fileExists / subflow
  *   - 模板：{{topic}}、{{args.x}}、{{steps.<name>}}；未知变量 = 步骤失败
  *   - 错误语义：装载期文件级 skip+warn（不阻断其他文件与内置流程）；
  *     运行期步骤级 failed（走既有 journal/resume 语义）
@@ -54,7 +54,18 @@ interface FileExistsStepDecl {
   name: string
   fileExists: string
 }
-type StepDecl = AgentStepDecl | CheckpointStepDecl | VerifyStepDecl | FileExistsStepDecl
+/** P2-9 子工作流步骤：subflow = 目标 flow id（模板）；args 值支持模板 */
+interface SubflowStepDecl {
+  name: string
+  subflow: string
+  args?: Record<string, string | number | boolean>
+}
+type StepDecl =
+  | AgentStepDecl
+  | CheckpointStepDecl
+  | VerifyStepDecl
+  | FileExistsStepDecl
+  | SubflowStepDecl
 
 export interface DeclarativeWorkflow {
   id: string
@@ -68,7 +79,7 @@ export interface DeclarativeWorkflow {
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/
-const STEP_KEYS = ["agent", "checkpoint", "verify", "fileExists"] as const
+const STEP_KEYS = ["agent", "checkpoint", "verify", "fileExists", "subflow"] as const
 
 /** 解析入口路径列表为 .json 文件列表（目录 = 一层扫描；不存在的入口报错） */
 async function expandEntries(entries: string[], baseDir: string): Promise<{ files: string[]; errors: string[] }> {
@@ -144,8 +155,9 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
       }
     }
     const kind = present[0]!
-    // P1-4：调用级选项键仅对 agent 步开放
-    const optionKeys = kind === "agent" ? ["model", "timeoutMs", "retries"] : []
+    // P1-4：调用级选项键仅对 agent 步开放；P2-9：args 仅对 subflow 步开放
+    const optionKeys =
+      kind === "agent" ? ["model", "timeoutMs", "retries"] : kind === "subflow" ? ["args"] : []
     if (kind === "agent") {
       if (
         step.model !== undefined &&
@@ -204,6 +216,18 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
           }
         }
       }
+    } else if (kind === "subflow") {
+      // P2-9：args = 原始值（number/boolean）或字符串模板的对象
+      if (step.args !== undefined) {
+        if (typeof step.args !== "object" || step.args === null || Array.isArray(step.args)) {
+          return { ok: false, error: at(`steps[${index}].args must be an object of primitives or templates`) }
+        }
+        for (const [argKey, argValue] of Object.entries(step.args as Record<string, unknown>)) {
+          if (typeof argValue !== "string" && typeof argValue !== "number" && typeof argValue !== "boolean") {
+            return { ok: false, error: at(`steps[${index}].args.${argKey} must be a string (template), number, or boolean`) }
+          }
+        }
+      }
     } else if (typeof step[kind] !== "string") {
       return { ok: false, error: at(`steps[${index}].${kind} must be a string (template)`) }
     }
@@ -214,7 +238,7 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
         !optionKeys.includes(k),
     )
     if (unknownStepKeys.length > 0) {
-      return { ok: false, error: at(`steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] (allowed: name + 恰好一个步骤键${kind === "agent" ? " + agent 可选 model/timeoutMs/retries" : ""})`) }
+      return { ok: false, error: at(`steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] (allowed: name + 恰好一个步骤键${kind === "agent" ? " + agent 可选 model/timeoutMs/retries" : ""}${kind === "subflow" ? " + subflow 可选 args" : ""})`) }
     }
   }
   if (dw.output !== undefined && typeof dw.output !== "string") {
@@ -318,6 +342,24 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
               ...(step.verify.lenses !== undefined ? { lenses: step.verify.lenses } : {}),
             })
             return { ...prev, [step.name]: result.passed ? "passed" : "failed" }
+          }
+        }
+        if ("subflow" in step) {
+          return async (prev: Record<string, unknown> | undefined) => {
+            if (typeof ctx.subflow !== "function") {
+              throw new Error(
+                `[agentic-workflow] subflow step "${step.name}" requires the journalDir ` +
+                  "plugin option (subflow runs are journaled with lineage)",
+              )
+            }
+            // args 值：字符串走模板解析，原始值直传
+            const subArgs: Record<string, unknown> = {}
+            for (const [key, value] of Object.entries(step.args ?? {})) {
+              subArgs[key] = typeof value === "string" ? resolve(value) : value
+            }
+            const result = await ctx.subflow(resolve(step.subflow), subArgs)
+            stepOutputs.set(step.name, result.output)
+            return { ...prev, [step.name]: result.output }
           }
         }
         return async (prev: Record<string, unknown> | undefined) => {
