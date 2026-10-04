@@ -19,6 +19,18 @@ Troubleshooting，按性质分流——与五连坑分类法一致）。
 
 ## 测试者脚本（可直接整段发给测试者）
 
+> 脚本已入库（`scripts/tester/`），两种分发方式任选：
+> ```bash
+> # 方式A：克隆/下载后本地跑
+> bash scripts/tester/step1-smoke.sh && bash scripts/tester/step2-flagship.sh
+> # 方式B：不克隆直接跑（bash 进程替换）
+> bash <(curl -fsSL https://raw.githubusercontent.com/mickorz/opencode-agentic-workflow/main/scripts/tester/step1-smoke.sh)
+> bash <(curl -fsSL https://raw.githubusercontent.com/mickorz/opencode-agentic-workflow/main/scripts/tester/step2-flagship.sh)
+> ```
+> 两个脚本自带看门狗与结果核验（step2 会搭最小 git 演示项目、journal 状态打印、
+> 交付分支提示）；模型不是 glm 时用 `PROVIDER=… MODEL=…` 环境变量覆盖。
+> 以下手工版内容与脚本等价，供阅读理解：
+
 > **测试 opencode-agentic-workflow（约 5 分钟）**
 >
 > 前置：已安装 OpenCode V2（`opencode` 命令可用、模型能正常对话）、Node 20+。
@@ -86,8 +98,11 @@ Troubleshooting，按性质分流——与五连坑分类法一致）。
 
 - 首次运行会从 npm 下载插件（OpenCode 自身缓存），需要网络
 - feature-development 的 check 阶段会跑 `npm install`（几分钟属正常）
+- 项目原本没有 lockfile 时，check 会新建 `package-lock.json` 并进入交付
+  分支（合并时留意即可；主 agent 也会提醒。已在 Watching 跟踪）
 - 交互审批弹窗只在 TUI 出现；`opencode run` 无 TUI 会 5 分钟超时拒绝
-  （headless 测旗舰请加 `"checkpoint": {"mode": "auto-approve"}`）
+  （headless 测旗舰请加 `"checkpoint": {"mode": "auto-approve"}`，
+  测试脚本 step2 已默认如此）
 - 失败 run 会保留 worktree + `agw/<runId>` 分支（设计行为，供 resume/取证）
 
 ## 节奏与渠道

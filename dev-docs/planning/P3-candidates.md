@@ -391,6 +391,49 @@ Decision:
 
 ---
 
+### Request: 无 lockfile 项目中 check 新建锁文件并入交付物
+
+Source:
+  外部测试者脚本验证 2026-10-04（scripts/tester/step2-flagship.sh 首跑，
+  全链 journal 5/5 completed）
+
+Frequency:
+  1 次
+
+Evidence:
+  演示项目（未提交 lockfile）跑 feature-development：check 阶段
+  `npm install` 新建 package-lock.json（+12 行），随 `git add -A` 进入
+  交付 commit（run_1791091950512_2zmjrm7d）。主 agent 总结中主动提醒
+  reviewer 留意。
+
+Problem:
+  v1.1.0 守卫用 `git checkout --` 只能还原**被修改的已跟踪**锁文件；
+  项目原本没有锁文件时新建的不会被移除，交付物含需求外文件。
+
+Existing capability:
+  `keepLockfileChanges` 选项控制保留/恢复语义；已跟踪 lockfile 的重写
+  噪声已恢复（五连坑坑 1 修复）。
+
+Current workaround:
+  reviewer 合并时留意（主 agent 会提醒）；项目预提交 lockfile 则不出现。
+
+Impact:
+  交付纯净度问题，非正确性问题；对应用型项目提交 lockfile 本就是最佳
+  实践，影响轻微。
+
+Complexity:
+  S（候选：固化前对「check 前不存在、check 后新增」的锁文件做 rm；
+  须与 keepLockfileChanges 正交）
+
+Success criteria:
+  无 lockfile 项目交付 commit 只含需求产物；keepLockfileChanges=true
+  时行为不变。
+
+Decision:
+  Watching（严重度低且仅 1 次；外部测试若再现即按 Frequency 规则升级）
+
+---
+
 ## Backlog（尚无真实用户来源，不得排期）
 
 以下均为**内部设计时已知的能力缺口**，仅作记录——在拿到真实用户反馈前，
