@@ -23,16 +23,25 @@
 import { Plugin } from "@opencode/plugin"
 import path from "node:path"
 
-import { setCheckpointGate } from "../quality/checkpoint.js"
+import { getCheckpointGate, setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
 import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { createFileTraceSink } from "../observability/trace.js"
 import { MetricsCollector, formatMetrics } from "../metrics/collector.js"
 import { WorkflowRegistry } from "../registry/registry.js"
-import { startWorkflow, startWorkflowDetached, resumeWorkflow, runWorkflowInline } from "../registry/runner.js"
+import {
+  startWorkflow,
+  startWorkflowDetached,
+  resumeWorkflow,
+  runWorkflowInline,
+  type DetachedWorkflowRun,
+} from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
 import { buildWorkflowArgs } from "./tool-args.js"
 import { defineWorkflow } from "./define-workflow.js"
+import { SchedulerService, ScheduleSkipError } from "../scheduler/service.js"
+import { anyLive } from "../registry/run-control.js"
+import { scheduleToolExecute, type ScheduleToolInput } from "./workflow-schedule.js"
 import { controlStatus, controlStop } from "./workflow-control.js"
 import { FileExecutionStore } from "../state/file-store.js"
 import type { ExecutionStore } from "../state/store.js"
@@ -97,6 +106,13 @@ export default Plugin.define({
        * dev-docs/planning/P4-custom-workflows.md；坏文件跳过并告警。
        */
       workflows?: string[]
+      /**
+       * P2-7 定时任务：schedules 落盘目录（配置/游标/触发记录），
+       * 相对项目目录。配置后启用 workflow_schedule 工具与调度器
+       * （随宿主进程存活；需同时配置 journalDir——scheduled run 走
+       * 持久化链路）。
+       */
+      schedulesDir?: string
     }
 
     // P2.6 成本估算兜底：宿主价目表（ctx.model.list，USD/M tokens）。
@@ -622,6 +638,118 @@ export default Plugin.define({
           return { output }
         },
       })
+
+      // P2-7 定时任务子系统（可选；schedulesDir + journalDir 同时配置启用）。
+      // 调度器随宿主进程存活（timer unref 不阻止退出）；停机错过的 slot
+      // 重启后合并为最近一个补跑；scheduled run 无人值守 -> 强制
+      // auto-approve 策略门（run 落定后恢复原门）；单飞冲突（anyLive，
+      // 含 inline run）-> 该 slot 记录 skipped（是跳过不是延迟）。
+      if (options.schedulesDir) {
+        if (!store) {
+          console.log(
+            "[agentic-workflow] scheduler disabled: schedulesDir requires journalDir " +
+              "(scheduled runs go through the journal-persisted path)",
+          )
+        } else {
+          const journalStore = store
+          const schedulesDir = path.isAbsolute(options.schedulesDir)
+            ? options.schedulesDir
+            : path.join(projectDir, options.schedulesDir)
+          const scheduler = new SchedulerService({
+            dir: schedulesDir,
+            flowExists: (flow) => registry.get(flow) !== undefined,
+            knownFlows: () => registry.ids(),
+            trigger: async (schedule) => {
+              if (anyLive()) {
+                throw new ScheduleSkipError(
+                  "another workflow run is live in this process (single-flight)",
+                )
+              }
+              // 无人值守：换 auto-approve 策略门；run 落定（或启动失败）后恢复
+              const savedGate = getCheckpointGate()
+              setCheckpointGate(new PolicyCheckpointGate("auto-approve"))
+              let detached: DetachedWorkflowRun
+              try {
+                detached = await startWorkflowDetached(
+                  registry,
+                  journalStore,
+                  schedule.flow,
+                  schedule.args ?? {},
+                  {},
+                )
+              } catch (error) {
+                setCheckpointGate(savedGate)
+                throw error
+              }
+              // 终态映射：completion 成功 -> success；失败/中止 -> journal 权威状态
+              const completion = detached.completion.then(
+                () => "success" as const,
+                async () => {
+                  const run = await journalStore.getRun(detached.runId)
+                  return run?.status === "aborted" ? ("aborted" as const) : ("failed" as const)
+                },
+              )
+              void detached.completion.finally(() => setCheckpointGate(savedGate))
+              return { runId: detached.runId, completion }
+            },
+          })
+          scheduler.start()
+          editor.add({
+            name: "workflow_schedule",
+            description:
+              "Manage scheduled workflow runs (requires the schedulesDir AND journalDir " +
+              "plugin options). The scheduler lives inside this opencode process - " +
+              "schedules only fire while the process runs; slots missed while it was " +
+              "down are coalesced into ONE catch-up run (the latest missed slot) on " +
+              "restart. Cron supports exactly four modes (local timezone):\n" +
+              "  * * * * * (every minute) or */n * * * * (every n minutes, n 1-59)\n" +
+              "  m * * * * (every hour at minute m)\n" +
+              "  m h * * * (daily at h:m)\n" +
+              "  m h * * W (weekly; W = 0-6 or comma list, 0=Sunday)\n" +
+              "Actions:\n" +
+              "- create: needs id (kebab-case), flow, cron; optional name, args " +
+              "{topic, ...} (validated against the flow schema at fire time), " +
+              "enabled (default true). Cursor baselines to creation time - earlier " +
+              "slots never fire; use runNow to fire immediately. Fires the latest " +
+              "registered version at fire time.\n" +
+              "- list / get(id) / delete(id): views include next/last run; delete also " +
+              "removes cursor and run history\n" +
+              "- runNow(id): manual trigger regardless of cron/cursor\n" +
+              "- enable(id) / disable(id)\n" +
+              "Scheduled runs are unattended: checkpoints auto-approve and no worktree " +
+              "isolation. If another run is live at fire time the slot is SKIPPED " +
+              "(recorded as skipped, not delayed).",
+            input: {
+              type: "object",
+              properties: {
+                action: {
+                  type: "string",
+                  enum: ["create", "list", "get", "delete", "runNow", "enable", "disable"],
+                  description: "create/list/get/delete/runNow/enable/disable",
+                },
+                id: { type: "string", description: "schedule id (kebab-case)" },
+                flow: { type: "string", description: "workflow id (create only)" },
+                cron: { type: "string", description: "four-mode cron subset (create only)" },
+                name: { type: "string", description: "display name (create only)" },
+                args: {
+                  type: "object",
+                  description: "workflow args incl. topic, passed at fire time (create only)",
+                },
+                enabled: { type: "boolean", description: "initial enabled state (create only)" },
+              },
+              required: ["action"],
+            } as Record<string, unknown>,
+            output: {
+              type: "string",
+            } as Record<string, unknown>,
+            async execute(input: unknown) {
+              return {
+                output: await scheduleToolExecute(scheduler, (input ?? {}) as ScheduleToolInput),
+              }
+            },
+          })
+        }
+      }
     })
   },
 })

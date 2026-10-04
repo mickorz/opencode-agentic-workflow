@@ -307,6 +307,8 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 | `isolation.dir` | `string` | 仓库同级 | worktree 父目录 |
 | `isolation.baseRef` | `string` | HEAD | worktree 基准 ref |
 | `isolation.cleanup` | `always` / `on-success` / `never` | `on-success` | 清理策略 |
+| `workflows` | `string[]` | — | 声明式流程路径（.json 文件或目录） |
+| `schedulesDir` | `string` | 关闭 | 定时任务目录（配置 + 游标 + 触发记录）；需同时配置 `journalDir`，启用 `workflow_schedule` 工具与调度器 |
 
 相对路径一律以**项目目录**（不是 service 进程 cwd）为基准解析。
 
@@ -332,6 +334,22 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 进程重启遗留的悬置 running run 会被直接收口）。
 
 **`workflow_metrics`** —— 只读查询本服务累计指标（`format: "text" | "json"`）。
+
+**`workflow_schedule`** —— 定时任务管理（需 `schedulesDir` + `journalDir`）：
+
+| 参数 | 说明 |
+|------|------|
+| `action` | `create` / `list` / `get` / `delete` / `runNow` / `enable` / `disable` |
+| `id` | schedule id（kebab-case；create 必填） |
+| `flow` / `cron` | create 必填：workflow id + 四模式 cron（`* * * * *`、`*/n`、`m * * * *`、`m h * * *`、`m h * * W`，本地时区） |
+| `args` | 触发时透传的 workflow 参数（含 `topic`） |
+| `name` / `enabled` | 展示名 / 初始启用态（缺省 true） |
+
+语义边界（如实）：调度器随宿主进程存活（进程退出即停）；停机错过的 slot
+重启后**合并为最近一个**补跑；创建时刻为游标基线（更早的 slot 不补跑，
+要立即跑用 `runNow`）；触发时若有 run 在跑（单飞）该 slot 记录 `skipped`
+（跳过不是延迟）；scheduled run 无人值守——checkpoint 强制 auto-approve、
+不启用 worktree 隔离；触发时用 registry 当前最新版本。
 
 ## Skills
 

@@ -39,6 +39,11 @@ export function isLive(runId: string): boolean {
   return liveRuns.has(runId)
 }
 
+/** 本进程是否有任一存活 run（P2-7 调度器单飞检查用） */
+export function anyLive(): boolean {
+  return liveRuns.size > 0
+}
+
 export function requestCancel(runId: string): void {
   cancelledRuns.add(runId)
 }

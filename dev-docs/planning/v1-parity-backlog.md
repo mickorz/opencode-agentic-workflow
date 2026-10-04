@@ -84,9 +84,17 @@
 
 ### P2 —— 差异化体验 / 生态（按反馈启动）
 
-7. **定时任务子系统**（M~L）——v1：cron + service + 协调 + store + `/schedule`
-   命令（自然语言→cron→schedule_create 工具），边界「需 OpenCode 常驻」。
-   v2：无。外部测试若有「定时跑旗舰」诉求则提前。
+7. ~~**定时任务子系统**（M~L）~~ ✅ **已完成（2026-10-06，随 0.5.0 发布）**——
+   零依赖四模式 cron（分钟步进/每小时/每天/每周；闭式 slot 数学，DST 偏差
+   如实文档化）+ 核心侧 SchedulerService（时钟/触发器注入，游标去重：
+   创建时刻基线、停机合并补跑最近 slot、单飞冲突 skip 消费）+
+   `workflow_schedule` 工具（create/list/get/delete/runNow/enable/disable，
+   视图含 next/last）。scheduled run 复用 `startWorkflowDetached`，无人值守
+   强制 auto-approve 门（run 落定恢复原门）；终态以 journal 为权威回写。
+   边界「需 OpenCode 常驻」如实写进工具描述。测试 +15（全量 281/281，
+   修一处 HOURLY 正则少星的转写 bug）；E2E 真机全语义：scheduled→success、
+   manual→success、单飞冲突 scheduled→skipped 三种记录 + journal 两连
+   completed + 产物落盘。
 8. **TUI 进度树与节点详情**（L）——v1 招牌体验：侧栏实时树、节点详情（结果 +
    模型/时长/token 元数据 + Open Session 回放）、嵌套层级树。v2：trace JSONL
    落盘但无可视化。技术路径已有底子（interactive gate 的 RPC 双形态）。
