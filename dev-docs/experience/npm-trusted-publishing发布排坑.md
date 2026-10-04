@@ -1,6 +1,6 @@
 # npm Trusted Publishing（OIDC 自动发布）排坑记
 
-**日期**：2026-10-04 ｜ **结果**：v0.3.2 全自动发布成功 ✅
+**日期**：2026-10-04（v0.3.2 成功 ✅）；2026-10-04 下午追加坑 F（v0.4.0 被拒案）
 **适用**：`.github/workflows/publish.yml`（tag → CI → npmjs OIDC 发布）
 
 ## 症状与排坑路径（5 次尝试）
@@ -59,6 +59,42 @@ Allowed actions:      ☑ npm publish      ← 2026 起独立选项！默认可�
 `git tag v0.3.2`（轻量）+ `git push --follow-tags` = **什么都不推**。
 `--follow-tags` 只带 annotated tag。用 `git tag -a` 或 `npm version`
 （它打的就是 annotated），或显式 `git push origin v0.3.2`。
+
+## 坑 F：恢复码登录 → 72 小时发布冻结（v0.4.0 被拒案，2026-10-04）
+
+**症状**：表单已修好、v0.3.2 成功过、workflow 一字未改，次日 v0.4.0
+两次 PUT 均被拒：
+
+```text
+npm error 404 Not Found - PUT https://registry.npmjs.org/@mickorz%2f...
+npm error 404 The requested resource '...@0.4.0' could not be found
+             or you do not have permission to access it.
+```
+
+**判别链**（从「又一坑」到根因，全程可复用）：
+
+1. **PUT-404 ≠ 交换-404**：坑 A/D 是 token 交换失败；本例 tarball 已
+   打包、OIDC 交换成功、**PUT 发布被拒** = 换到的凭证被判定无发布权限。
+   npm 用 404 防探测（社区已有「valid OIDC 被拒无任何日志」的抱怨）。
+2. **workflow 侧排除**：与成功 run 逐行 `comm` 对比日志 = 零差异
+   （同 node v24.21.0、同触发、同管线）。node/npm 版本必查（setup-node
+   不锁版本，小版本漂移是常见变量），本例一致 → 锁定 registry 侧。
+3. **npm 状态页**：全绿（按账号策略冻结≠事故，状态页不会显示）。
+4. **时间线 + 用户确认**：成功与失败之间账号曾用**恢复码登录**
+   （修 TP 表单时）→ 命中 npm 2026-09 起的全账号策略：恢复码登录成功
+   → 发布与敏感写入冻结 72h（登录/消费不受影响）。
+
+**处置**：
+
+- 冻结期内任何发布路径（CI OIDC / 本地交互 2FA）都可能被拒；
+  交互态报错更明确，值得试一次拿官方文案
+- **绝不能再碰恢复码**——再用一次，72h 重新计时
+- 到期后 `gh run rerun <id> --failed` 重跑即可（tag/版本不动）
+- 改走「npm stage publish + 人工批准」也可绕开冻结（未验证，备选）
+
+**顺带情报**（2026-09-30 npm 变更）：TP 配置新增 opt-in 权限
+`Allow npm dist-tag`（默认关）。普通 publish 隐式带 latest 不受影响，
+但下次动 TP 表单时建议顺手勾上；CLI 侧要求 npm ≥ 11.21.0 / 12.2.0。
 
 ## 误报排除
 

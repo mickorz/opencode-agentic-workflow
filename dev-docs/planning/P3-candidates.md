@@ -474,10 +474,10 @@ Existing capability:
 
 Current workaround:
   清理长驻 `opencode` server 进程后重跑（`kill <pid>` 或 `pkill -x opencode`）。
-  验证结果回填处：**已由更强证据取代**——修复后的受控 E2E（E2E B）在
-  interactive 坏配置下以 `checkpointMode=auto-approve` 显式参数运行，
-  审批同毫秒批准（27s 全链；交互门至少 300s），证明显式参数对投毒
-  配置免疫；清进程缓解的独立验证 run 因输出管道缓冲未回收，不再追。
+  验证结果回填处：✅ 清场后同脚本完整重跑 5/5 completed、交付分支正常
+  （run_1791099321042_usk6w8sj）；更强证据为 E2E B——修复后在 interactive
+  坏配置下以 `checkpointMode=auto-approve` 显式参数运行，审批同毫秒批准
+  （27s 全链；交互门至少 300s），显式参数对投毒配置免疫。
 
 修复落位（v0.4.0）：
   `src/plugin/checkpoint-override.ts` —— workflow 工具新增保留参数

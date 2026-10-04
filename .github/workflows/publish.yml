@@ -41,8 +41,10 @@ jobs:
 
       # ⚠️ 必须 setup-node@v7：v7 起才移除占位 NODE_AUTH_TOKEN=XXXXX-… 注入
       # （actions/setup-node#1440）。低于 v7 时 npm 误以为已有凭证而跳过 OIDC
-      # trusted-publisher 交换 → E404/ENEEDAUTH（日志里的 npm notice
-      # "tokens that bypass 2FA..." 即走错了 classic-token 路径的标志）。
+      # trusted-publisher 交换 → E404/ENEEDAUTH。
+      # （注意：日志里的 npm notice "tokens that bypass 2FA..." 是普适 PSA，
+      # 成功的 OIDC 发布里同样出现——2026-10-04 对比 v0.3.2 成功运行证伪
+      # 了「该提示 = 走错路径」的旧判别法，勿再据此误诊。）
       - uses: actions/setup-node@v7
         with:
           node-version: 24
