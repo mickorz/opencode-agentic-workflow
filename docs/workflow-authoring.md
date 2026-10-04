@@ -1,12 +1,53 @@
 # Workflow Authoring Best Practices
 
-> 写给要编写或修改 `WorkflowDefinition` 的人。
+> 写给要编写或修改 workflow 的人。
 > 规则全部来自真实事故（titlecase 旗舰首跑五连坑，见
 > `dev-docs/experience/titlecase-feature-run五连坑.md`）与内置 workflow 的实践。
 >
-> ⚠️ 当前限制：npm 包只导出插件入口，自定义 workflow 尚无装载机制
-> （Backlog：见 `dev-docs/planning/P3-candidates.md`）。本指南现阶段适用于
-> 本仓库贡献者；SDK 化后适用于所有 author。
+> 两条路径：**声明式 JSON**（零代码，插件 `workflows` 配置即装载，见下章，
+> 适合直线流程）与 **代码式 `WorkflowDefinition`**（本仓库内置流程的做法，
+> 适合 parallel/retry/fallback 等复杂控制流）。
+
+## 零代码自定义 workflow（声明式 JSON）
+
+插件配置 `workflows`（≥0.5.0）指向 .json 文件或目录（相对项目目录），
+init 时自动装载注册——journal / trace / metrics / resume / workspace
+隔离 / `checkpointMode` 覆盖对自定义流程**全部同样生效**。
+
+```jsonc
+// opencode.json 插件 options 内：
+"workflows": ["flows"]           // flows/ 目录下每个 *.json 一个流程
+
+// flows/my-flow.json：
+{
+  "id": "my-flow",               // kebab-case；工具 flow 参数即它；不得撞内置 id
+  "version": "1.0.0",            // 缺省 1.0.0
+  "description": "给工具枚举看的一句话",
+  "args": { "...": "可选，JSON Schema；缺省 = 仅 topic" },
+  "steps": [
+    { "name": "draft", "agent": "针对 {{topic}} 的分析…（禁止调用 workflow 工具）" },
+    { "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "合格标准" } },
+    { "name": "file",  "fileExists": "out.md" },          // 相对 workspaceRoot
+    { "name": "gate",  "checkpoint": "「{{topic}}」已生成，批准？" }
+  ],
+  "output": "定稿：{{steps.draft}}"   // 缺省 = 最后一个 agent 步输出
+}
+```
+
+**步骤四类**（互斥键，恰好一个）：`agent`（子 agent，输出供后续 `{{steps.<name>}}`
+引用）、`checkpoint`（审批门）、`verify`（语义评审，否决即失败）、`fileExists`
+（存在性断言）。模板变量：`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`；
+未知变量 = 该步骤失败（journal 可见，绝不静默空串）。
+
+**声明式 author 的纪律**（对应下方通用纪律的适用子集）：
+
+- `agent` prompt 里**仍要写「禁止调用 workflow / workflow_metrics 工具」**
+  ——递归自饿死事故与装载方式无关（通用纪律 4）
+- 增删/重排 steps = 改版本契约，**必须升 `version`**（resume 按精确版本解析）
+- 坏文件只会 warn+跳过，不阻断其他流程——修好文件重启 OpenCode 即重新装载
+- 需要 parallel / 条件分支 / 重试编排？声明式 v1 只有直线 sequence，
+  复杂控制流走代码式（`src/workflows/` 参考内置实现）
+
 
 ## 通用结构纪律
 

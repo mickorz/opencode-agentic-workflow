@@ -7,8 +7,9 @@
 
 ```text
 先理解：为什么 workflow 比单 Agent 可靠        -> 01
-再理解：为什么 workflow 可以组织多个 Agent      -> 02（规划中）
-最后理解：为什么它能用于生产环境               -> 03+（规划中）
+再上手：写出你自己的流程（15 分钟，声明式）     -> 02
+再理解：为什么 workflow 可以组织多个 Agent      -> 03（规划中）
+最后理解：为什么它能用于生产环境               -> 04+（规划中）
 ```
 
 ## 示例索引
@@ -16,10 +17,11 @@
 | # | 目录 | 演示内容 | 核心能力 |
 |---|------|----------|----------|
 | 01 | [coding-reliable](./01-coding-reliable/) ⭐ | 一句话需求 → 隔离 worktree 实现 → 测试验证 → reviewer 审查 → 人工审批 → 分支交付 | 全家桶：reliability 语义 + worktree 隔离 + durable journal |
-| 02 | multi-agent-feature-design（规划） | 需求分析后多路并行（客户端/服务端/UI…）再汇总 | parallel 编排与上下文隔离 |
-| 03 | crash-resume（规划） | 长链路中途杀进程，精确恢复续跑 | journal + resume |
-| 04 | human-checkpoint（规划） | 深度交互审批/驳回/改写循环 | interactive checkpoint |
-| 05 | observability（规划） | metrics/trace 查询与成本核算 | observability |
+| 02 | [custom-workflow](./02-custom-workflow/) | 一个 40 行 JSON 文件注册你自己的流程（agent → fileExists → checkpoint） | 声明式装载 + 模板系统；内置机制对自定义流程全量生效 |
+| 03 | multi-agent-feature-design（规划） | 需求分析后多路并行（客户端/服务端/UI…）再汇总 | parallel 编排与上下文隔离 |
+| 04 | crash-resume（规划） | 长链路中途杀进程，精确恢复续跑 | journal + resume |
+| 05 | human-checkpoint（规划） | 深度交互审批/驳回/改写循环 | interactive checkpoint |
+| 06 | observability（规划） | metrics/trace 查询与成本核算 | observability |
 
 ## 示例规范（examples/ 目录约定）
 

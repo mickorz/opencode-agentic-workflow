@@ -1,9 +1,11 @@
 # P4 —— 自定义 workflow 装载（声明式 JSON）
 
-**日期**：2026-10-04 立项 ｜ **状态**：实现完成——装载器/插件接线/单测 8 项
+**日期**：2026-10-04 立项 ｜ **状态**：完成——装载器/插件接线/单测 8 项
 （全量 204/204）/ E2E 一次通过（自定义四步流程 release-notes：draft→review→file→gate，
-journal 全 completed、真实产物落盘、verify 语义评审跑通、自定义 id 进入工具枚举）。
-待办：examples/02 读者向示例 + authoring guide 章节（随下个 commit）。
+journal 全 completed、真实产物落盘、verify 语义评审跑通、自定义 id 进入工具枚举）；
+`examples/02-custom-workflow/`（Gallery 02 槽位，含改造练习）与
+authoring guide「零代码自定义 workflow」章已就位（原「尚无装载机制」警告作废）。
+发版 0.5.0 待恢复码冻结解除（~10/6 晚）。
 **动机**：Adoption A4 拐点（用户开始写自己的 workflow）的前置缺口——npm 包
 目前只导出插件入口，用户无法注册自己的流程，只能改插件源码重发包。
 
