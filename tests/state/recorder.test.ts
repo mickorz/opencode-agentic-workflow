@@ -10,7 +10,7 @@ import { test } from "node:test"
 
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import type { ExecutionStore } from "../../src/state/store.js"
-import { RunJournal } from "../../src/state/recorder.js"
+import { RunJournal, toRunDetail } from "../../src/state/recorder.js"
 import { createEventBus, setEventBus } from "../../src/observability/events.js"
 
 let baseDir: string
@@ -200,6 +200,52 @@ test("P2-8: 每次状态转换发射 run.progress 快照（全量、可序列化
       final.steps.map((s) => s.status),
       ["completed", "running"],
     )
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("toRunDetail: 预览化载荷（截断/错误摘要/lineage/args）", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.2.0" },
+      args: { topic: "多字节 预览" },
+      stepNames: ["gather", "verify"],
+      stepCount: 2,
+      runId: "run_detail",
+      parentRunId: "run_parent",
+      depth: 1,
+    })
+    await journal.stepStarted(0)
+    await journal.stepCompleted(0, "x".repeat(600))
+    await journal.stepStarted(1)
+    const boom = new Error("verify 否决: " + "y".repeat(400))
+    boom.name = "WorkflowCheckError"
+    await journal.stepFailed(1, boom)
+    await journal.fail(boom)
+
+    const detail = toRunDetail(journal.run)
+    assert.equal(detail.runId, "run_detail")
+    assert.deepEqual(detail.workflow, { id: "demo", version: "1.2.0" })
+    assert.equal(detail.status, "failed")
+    assert.equal(detail.parentRunId, "run_parent")
+    assert.equal(detail.depth, 1)
+    assert.ok(detail.args?.includes("多字节"))
+    // 输出预览截断到 500 字符 + …（长文本压成单行）
+    assert.equal(detail.steps[0]?.output?.length, 501)
+    assert.ok(detail.steps[0]?.output?.endsWith("…"))
+    assert.ok(!detail.steps[0]?.output?.includes("\n"))
+    // 错误摘要 "Name: message" 截断 300 + …
+    assert.ok(detail.steps[1]?.error?.startsWith("WorkflowCheckError: "))
+    assert.ok((detail.steps[1]?.error?.length ?? 0) <= 301)
+    assert.ok(detail.steps[1]?.error?.endsWith("…"))
+    // run 级失败摘要存在且截断
+    assert.ok(detail.failure?.startsWith("WorkflowCheckError: "))
+    assert.ok((detail.failure?.length ?? 0) <= 301)
+    // 失败步骤无 output 键（错误与输出互斥呈现）
+    assert.equal("output" in (detail.steps[1] ?? {}), false)
   } finally {
     setEventBus(createEventBus())
   }

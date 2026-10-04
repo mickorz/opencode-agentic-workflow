@@ -6,7 +6,8 @@
  *   - 订阅 server 侧 checkpoint 审批请求事件，弹出 TUI 确认框，
  *     把人工决定经 RPC 应答回 server（InteractiveCheckpointGate 挂起处）。
  *   - /workflow 命令打开进度面板（session.panel slot）：
- *     初始经 snapshot RPC 同步近期 run，之后订阅 progress 事件实时更新。
+ *     初始经 snapshot RPC 同步近期 run，之后订阅 progress 事件实时更新；
+ *     最新 run 的节点详情经 detail RPC 按需拉取（runId@status 去重）。
  *
  * 注意：
  *   - 本文件只在 TUI 宿主内加载；server 宿主只加载 "." 入口（src/plugin/index.ts）。
@@ -21,10 +22,16 @@ import { CHECKPOINT_REQUESTED_EVENT, CheckpointRpc } from "./checkpoint-rpc.js"
 import {
   PROGRESS_EVENT,
   ProgressRpc,
+  parseRunDetail,
   parseRunSnapshot,
   parseRunSnapshotList,
 } from "./progress-rpc.js"
-import { renderPanelLines } from "./progress-view.js"
+import {
+  renderDetailLines,
+  renderDetailSection,
+  renderPanelLines,
+  type DetailSection,
+} from "./progress-view.js"
 import type { RunProgressSnapshot } from "../observability/events.js"
 
 type TuiContext = Plugin.Context
@@ -90,13 +97,42 @@ async function handleCheckpointRequest(ctx: TuiContext, data: unknown): Promise<
 function setupProgressPanel(ctx: TuiContext): () => void {
   const [runs, setRuns] = createSignal<readonly RunProgressSnapshot[]>([])
   const [live, setLive] = createSignal(false)
+  const [detail, setDetail] = createSignal<DetailSection | undefined>()
+  // 去重键：runId@status——同一状态下只拉一次，终态转换再拉一次收尾
+  let detailKey = ""
+
+  /** 节点详情按需拉取（journal 单读；无 journal/旧 server -> 空行区，不重试轰炸） */
+  const refreshDetail = (snapshot: RunProgressSnapshot): void => {
+    const key = `${snapshot.runId}@${snapshot.status}`
+    if (key === detailKey) return
+    detailKey = key
+    void ctx.client
+      .rpc(ProgressRpc)
+      .detail({ runId: snapshot.runId })
+      .then((output) => {
+        // 竞态守卫：慢回包不属于最新请求时丢弃
+        if (key !== detailKey) return
+        const parsed = parseRunDetail(output)
+        setDetail(
+          parsed
+            ? { runId: snapshot.runId, lines: renderDetailLines(parsed) }
+            : { runId: snapshot.runId, lines: [] },
+        )
+      })
+      .catch(() => {
+        if (key !== detailKey) return
+        setDetail({ runId: snapshot.runId, lines: [] })
+      })
+  }
 
   // 初始同步：server 侧 board 的近期 run（面板未开也拉——首次打开即时有内容）
   void ctx.client
     .rpc(ProgressRpc)
     .snapshot({})
     .then((output) => {
-      setRuns(parseRunSnapshotList(output))
+      const parsed = parseRunSnapshotList(output)
+      setRuns(parsed)
+      if (parsed[0]) refreshDetail(parsed[0])
     })
     .catch(() => {
       // server 侧无 progress board（旧版本/注册失败）——面板维持空态
@@ -111,6 +147,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
       const rest = prev.filter((r) => r.runId !== snapshot.runId)
       return [snapshot, ...rest].slice(0, 50)
     })
+    refreshDetail(snapshot)
   })
 
   // 面板 claim：宿主选中我们的内容名时才渲染；其余名字让位（返回空 fragment）
@@ -121,7 +158,10 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         <box flexDirection="column" paddingLeft={1} paddingRight={1}>
           {/* 视图行全部来自纯函数层；signal 读取发生在 JSX 内（响应式追踪） */}
           {(live() || runs().length > 0
-            ? renderPanelLines(runs())
+            ? [
+                ...renderPanelLines(runs()),
+                ...renderDetailSection(runs(), detail()),
+              ]
             : ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
           ).map((line) => (
             <text>{line}</text>

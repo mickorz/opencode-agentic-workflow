@@ -391,7 +391,19 @@ Agentic Workflow
   · verify
   ↳ verify rejected the patch
 ✓ paced@1.0.0  24.0s
+── detail
+✓ artifact@1.0.0 · completed · 42.0s
+  run_9f3c… · args {"topic":"节点详情验收"}
+  ✓ write  18.2s
+    → 已写入 artifact.md（约 1200 字）……
+  ✓ check  1.1s
+    → artifact.md exists (4.2 KB)
 ```
+
+面板下半区是**节点详情**（P2-8b）：最新 run 的 journal 单读投影——runId /
+args 预览 / 每步骤的输出或错误预览（折行 + 截断）/ 步骤与总时长。详情经
+`agentic-workflow-progress` RPC 的 `detail` 方法拉取（同一状态只拉一次，
+终态转换再拉一次收尾）；未配置 `journalDir` 时详情区静默缺省，面板其余不受影响。
 
 数据链路：RunJournal 状态转换 → `run.progress` 事件总线 → ProgressBoard（容量 20，
 journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RPC。headless
@@ -399,7 +411,8 @@ journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RP
 （`events.jsonl`），可作为无头观测替代。
 
 注意：面板渲染属交互式 TUI 行为，需在真实 TUI 里人工确认（本仓库自动化覆盖到
-server 侧链路：事件发射、board 维护、RPC 契约均有测试与 E2E 证据）。
+server 侧链路：事件发射、board 维护、RPC 契约（snapshot/detail）均有测试与 E2E
+证据；详情渲染函数对真实 journal 的输出有 E2E 快照）。
 
 ## 嵌套工作流（subflow）
 

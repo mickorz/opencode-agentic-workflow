@@ -14,6 +14,7 @@
 import { Rpc } from "@opencode/plugin/rpc"
 
 import type { RunProgressSnapshot } from "../observability/events.js"
+import type { RunDetail } from "../state/recorder.js"
 
 /** run 快照 JSON Schema（event 载荷与 snapshot 方法输出条目共用） */
 const runSnapshotSchema = {
@@ -53,6 +54,48 @@ const runSnapshotSchema = {
   required: ["runId", "workflow", "status", "startedAt", "steps"],
 } as const
 
+/** run 详情 JSON Schema（detail 方法输出；步骤载荷为预览化字符串） */
+const runDetailSchema = {
+  type: "object",
+  properties: {
+    runId: { type: "string" },
+    workflow: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        version: { type: "string" },
+      },
+      required: ["id", "version"],
+      additionalProperties: false,
+    },
+    status: { type: "string" },
+    startedAt: { type: "number" },
+    completedAt: { type: "number" },
+    failure: { type: "string" },
+    parentRunId: { type: "string" },
+    depth: { type: "number" },
+    args: { type: "string" },
+    steps: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "number" },
+          name: { type: "string" },
+          status: { type: "string" },
+          startedAt: { type: "number" },
+          completedAt: { type: "number" },
+          input: { type: "string" },
+          output: { type: "string" },
+          error: { type: "string" },
+        },
+        required: ["index", "status"],
+      },
+    },
+  },
+  required: ["runId", "workflow", "status", "startedAt", "steps"],
+} as const
+
 export const ProgressRpc = Rpc.define({
   id: "agentic-workflow-progress",
   methods: {
@@ -69,6 +112,25 @@ export const ProgressRpc = Rpc.define({
           runs: { type: "array", items: runSnapshotSchema },
         },
         required: ["runs"],
+        additionalProperties: false,
+      },
+    },
+    /** TUI -> server：单个 run 的节点详情（journal 单读，载荷为预览） */
+    detail: {
+      input: {
+        type: "object",
+        properties: {
+          runId: { type: "string" },
+        },
+        required: ["runId"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          run: { oneOf: [runDetailSchema, { type: "null" }] },
+        },
+        required: ["run"],
         additionalProperties: false,
       },
     },
@@ -120,4 +182,46 @@ export function parseRunSnapshotList(data: unknown): RunProgressSnapshot[] {
   if (!Array.isArray(runs)) return []
   const parsed = runs.map(parseRunSnapshot).filter((s) => s !== undefined)
   return parsed.filter((s): s is RunProgressSnapshot => s !== undefined)
+}
+
+/** 收窄 detail 方法入参为 runId；不合法（缺/非串）返回 undefined */
+export function parseRunDetailRequest(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined
+  const runId = (data as { runId?: unknown }).runId
+  return typeof runId === "string" ? runId : undefined
+}
+
+/** 收窄 detail 方法输出为详情；null（run 不存在/无 journal）或不合法返回 undefined */
+export function parseRunDetail(data: unknown): RunDetail | undefined {
+  if (typeof data !== "object" || data === null) return undefined
+  const record = data as { run?: unknown }
+  if (record.run === null) return undefined
+  const run = record.run
+  if (typeof run !== "object" || run === null) return undefined
+  const detail = run as {
+    runId?: unknown
+    workflow?: unknown
+    status?: unknown
+    startedAt?: unknown
+    steps?: unknown
+  }
+  if (typeof detail.runId !== "string") return undefined
+  if (typeof detail.status !== "string") return undefined
+  if (typeof detail.startedAt !== "number") return undefined
+  if (!Array.isArray(detail.steps)) return undefined
+  const workflow = detail.workflow as { id?: unknown; version?: unknown } | undefined
+  if (
+    typeof workflow !== "object" ||
+    workflow === null ||
+    typeof workflow.id !== "string" ||
+    typeof workflow.version !== "string"
+  ) {
+    return undefined
+  }
+  for (const step of detail.steps) {
+    if (typeof step !== "object" || step === null) return undefined
+    const s = step as { index?: unknown; status?: unknown }
+    if (typeof s.index !== "number" || typeof s.status !== "string") return undefined
+  }
+  return run as RunDetail
 }

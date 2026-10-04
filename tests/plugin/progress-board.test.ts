@@ -163,3 +163,89 @@ test("seedFromStore: newest-first 映射 + 容量截断", async () => {
   assert.equal(seeded.length, 2)
   assert.ok(seeded.every((r) => r.status === "completed"))
 })
+
+test("bindProgressBoard: detail 方法（journal 单读；未知 run/坏入参 -> null）", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-board-detail-"))
+  const store = new FileExecutionStore(baseDir)
+
+  const journal = await RunJournal.start(store, {
+    workflow: { id: "demo", version: "1.0.0" },
+    args: { topic: "T" },
+    stepCount: 2,
+    stepNames: ["gather", "verify"],
+    runId: "run_detail",
+  })
+  await journal.stepStarted(0)
+  await journal.stepCompleted(0, "产物文本")
+  await journal.stepStarted(1)
+  await journal.stepCompleted(1, "ok")
+  await journal.complete()
+
+  const registrations: Array<Record<string, (input: unknown) => Promise<unknown>>> = []
+  const bus = createEventBus()
+  setEventBus(bus)
+  let board: Awaited<ReturnType<typeof bindProgressBoard>> | undefined
+  try {
+    board = await bindProgressBoard({
+      rpc: {
+        register: async (
+          def: unknown,
+          handlers: Record<string, (input: unknown) => Promise<unknown>>,
+        ) => {
+          registrations.push({ id: (def as { id: string }).id, ...handlers })
+          return { events: { emit: async () => {} } }
+        },
+      } as never,
+      store,
+    })
+  } finally {
+    setEventBus(createEventBus())
+  }
+
+  const reg = registrations[0]
+  assert.ok(reg)
+  assert.equal(typeof reg.detail, "function")
+
+  // 命中：journal 单读，含 args/步骤输出预览
+  const hit = (await reg.detail?.({ runId: "run_detail" })) as {
+    run: { runId: string; status: string; args?: string; steps: Array<{ output?: string }> }
+  }
+  assert.equal(hit.run.runId, "run_detail")
+  assert.equal(hit.run.status, "completed")
+  assert.ok(hit.run.args?.includes("topic"))
+  assert.equal(hit.run.steps[0]?.output, "产物文本")
+
+  // 未知 run / 坏入参 -> null（面板不渲染详情区，不抛错）
+  const missing = (await reg.detail?.({ runId: "run_nope" })) as { run: unknown }
+  assert.equal(missing.run, null)
+  const malformed = (await reg.detail?.({ nope: 1 })) as { run: unknown }
+  assert.equal(malformed.run, null)
+
+  board?.dispose()
+})
+
+test("bindProgressBoard: 无 store（未配 journalDir）时 detail 恒为 null", async () => {
+  const registrations: Array<Record<string, (input: unknown) => Promise<unknown>>> = []
+  const bus = createEventBus()
+  setEventBus(bus)
+  let board: Awaited<ReturnType<typeof bindProgressBoard>> | undefined
+  try {
+    board = await bindProgressBoard({
+      rpc: {
+        register: async (
+          def: unknown,
+          handlers: Record<string, (input: unknown) => Promise<unknown>>,
+        ) => {
+          registrations.push({ id: (def as { id: string }).id, ...handlers })
+          return { events: { emit: async () => {} } }
+        },
+      } as never,
+    })
+  } finally {
+    setEventBus(createEventBus())
+  }
+  const reg = registrations[0]
+  const out = (await reg.detail?.({ runId: "run_any" })) as { run: unknown }
+  assert.equal(out.run, null)
+  board?.dispose()
+})

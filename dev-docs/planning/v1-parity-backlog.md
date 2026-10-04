@@ -101,9 +101,14 @@
    `agentic-workflow-progress` RPC（snapshot 方法 + progress 事件）→
    TUI `/workflow` 命令打开 session.panel 面板（solid 渲染，view model 纯函数层
    `progress-view.ts` 单测全覆盖）。运行时依赖精确 pin（solid-js 1.9.12 /
-   @opentui 0.5.14，v1 双实例教训）。节点详情/模型 token 元数据/Open Session
-   回放未做（快照刻意不带 output；后续可加 journal 详情 RPC）；面板视觉需
-   交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配）。
+   @opentui 0.5.14，v1 双实例教训）。**节点详情已补（2026-10-06，P2-8b）**：
+   RPC 加 `detail` 方法（journal 单读 → `toRunDetail` 预览化投影：args/步骤
+   输出/错误/时长，500/300/200 字符截断），TUI 面板下半区渲染最新 run 的
+   详情（`renderDetailLines` 纯函数 + runId@status 去重拉取 + 慢回包竞态守卫）；
+   模型 token 元数据/Open Session 回放仍未做（前者需 agent 事件带 runId +
+   journal 侧聚合，记入后续缺口；后者依赖宿主 API）。面板视觉需
+   交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配；
+   详情渲染函数对真实 journal 的输出有 E2E 快照）。
 9. ~~**嵌套工作流**（L，架构前置）~~ **已闭环（2026-10-06，P2-9）**——
    架构前置先行落地：checkpoint gate / workspace 从模块级单例改为
    **run 级上下文**（AsyncLocalStorage；executor 保持全局——从不按 run

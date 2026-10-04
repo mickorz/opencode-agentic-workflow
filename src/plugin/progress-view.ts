@@ -6,6 +6,7 @@
  */
 
 import type { RunProgressSnapshot } from "../observability/events.js"
+import type { RunDetail } from "../state/recorder.js"
 
 const RUN_GLYPHS: Record<string, string> = {
   running: "▶",
@@ -160,5 +161,108 @@ export function renderPanelLines(
   }
 
   topLevels.forEach((run, i) => emitRun(run, i))
+  return lines
+}
+
+/** TUI 侧详情缓存条目（runId + 预渲染行；key 仅供去重，不参与渲染） */
+export interface DetailSection {
+  runId: string
+  lines: string[]
+}
+
+/** 详情区行：缓存的详情属于板上最新 run 时输出（头行分隔），否则空 */
+export function renderDetailSection(
+  runs: readonly RunProgressSnapshot[],
+  detail: DetailSection | undefined,
+): string[] {
+  const newest = runs[0]
+  if (!newest || !detail || detail.runId !== newest.runId || detail.lines.length === 0) {
+    return []
+  }
+  return ["── detail", ...detail.lines]
+}
+
+/** 单段预览 -> 折行块（宽度不定时按单行原样；超出行数截断加 …） */
+function wrapPreview(
+  text: string,
+  maxWidth: number | undefined,
+  maxLines: number,
+): string[] {
+  if (maxWidth === undefined || maxWidth < 8) return [text]
+  const chunks: string[] = []
+  for (let i = 0; i < text.length && chunks.length < maxLines; i += maxWidth) {
+    chunks.push(text.slice(i, i + maxWidth))
+  }
+  if (text.length > maxLines * maxWidth) {
+    const last = chunks[chunks.length - 1] ?? ""
+    chunks[chunks.length - 1] = `${last.slice(0, Math.max(1, maxWidth - 1))}…`
+  }
+  return chunks
+}
+
+export interface DetailLinesOptions {
+  /** 行宽上限（截断加 …）；默认不截断 */
+  maxWidth?: number
+  /** 每段预览最多折行数（默认 3） */
+  maxPreviewLines?: number
+}
+
+/**
+ * run 详情 -> 展示行（P2-8b 节点详情）：头行（workflow@version · 状态 · 时长）、
+ * runId/lineage、args 预览、逐步骤（状态 + 时长 + 输出/错误预览折行）。
+ * 纯函数，TUI 组件逐行渲染；单测直接断言行内容。
+ */
+export function renderDetailLines(
+  detail: RunDetail,
+  now: number = Date.now(),
+  options?: DetailLinesOptions,
+): string[] {
+  const maxWidth = options?.maxWidth
+  const maxPreview = options?.maxPreviewLines ?? 3
+  const duration =
+    detail.completedAt !== undefined
+      ? formatDuration(Math.max(0, detail.completedAt - detail.startedAt))
+      : formatDuration(Math.max(0, now - detail.startedAt))
+  const lines: string[] = [
+    truncate(
+      `${runGlyph(detail.status)} ${detail.workflow.id}@${detail.workflow.version} · ${detail.status} · ${duration}`,
+      maxWidth,
+    ),
+  ]
+  const meta = [detail.runId]
+  if (detail.parentRunId !== undefined) {
+    meta.push(`parent ${detail.parentRunId}`, `depth ${detail.depth ?? "?"}`)
+  }
+  lines.push(truncate(`  ${meta.join(" · ")}`, maxWidth))
+  if (detail.args !== undefined && detail.args !== "") {
+    lines.push(truncate(`  args ${detail.args}`, maxWidth))
+  }
+  for (const step of detail.steps) {
+    const stepDuration =
+      step.startedAt !== undefined
+        ? `  ${formatDuration(Math.max(0, (step.completedAt ?? now) - step.startedAt))}`
+        : ""
+    lines.push(
+      truncate(
+        `  ${stepGlyph(step.status)} ${step.name ?? `step ${step.index}`}${stepDuration}`,
+        maxWidth,
+      ),
+    )
+    // 预览折行宽度扣除缩进，保证整行不超 maxWidth（宽度不定时不折）
+    const previewWidth =
+      maxWidth === undefined ? undefined : Math.max(8, maxWidth - 4)
+    if (step.error !== undefined && step.error !== "") {
+      for (const line of wrapPreview(`✗ ${step.error}`, previewWidth, maxPreview)) {
+        lines.push(`    ${line}`)
+      }
+    } else if (step.output !== undefined && step.output !== "") {
+      for (const line of wrapPreview(`→ ${step.output}`, previewWidth, maxPreview)) {
+        lines.push(`    ${line}`)
+      }
+    }
+  }
+  if (detail.failure !== undefined && detail.failure !== "") {
+    lines.push(truncate(`  ↳ ${detail.failure}`, maxWidth))
+  }
   return lines
 }

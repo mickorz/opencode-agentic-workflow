@@ -22,8 +22,8 @@ import {
   type WorkflowEvent,
 } from "../observability/events.js"
 import type { ExecutionStore } from "../state/store.js"
-import { toProgressSnapshot } from "../state/recorder.js"
-import { ProgressRpc } from "./progress-rpc.js"
+import { toProgressSnapshot, toRunDetail } from "../state/recorder.js"
+import { ProgressRpc, parseRunDetailRequest } from "./progress-rpc.js"
 
 type RpcDomain = Plugin.Context["rpc"]
 
@@ -112,7 +112,7 @@ export class ProgressBoard {
 }
 
 /**
- * 插件装配：注册 ProgressRpc（snapshot 方法）+ 订阅事件总线 + store 种子。
+ * 插件装配：注册 ProgressRpc（snapshot/detail 方法）+ 订阅事件总线 + store 种子。
  * 返回 board（持有者可 dispose；插件生命周期内常驻）。
  */
 export async function bindProgressBoard(deps: {
@@ -123,6 +123,13 @@ export async function bindProgressBoard(deps: {
   let board: ProgressBoard | undefined
   const registration: ProgressRegistration = await deps.rpc.register(ProgressRpc, {
     snapshot: async () => ({ runs: board ? board.list().slice() : [] }),
+    // journal 单读（无 journalDir 配置 -> store 缺席 -> null；面板不渲染详情区）
+    detail: async (input: unknown) => {
+      const runId = parseRunDetailRequest(input)
+      if (!deps.store || runId === undefined) return { run: null }
+      const run = await deps.store.getRun(runId)
+      return { run: run ? toRunDetail(run) : null }
+    },
   })
   // store 种子：面板打开时能立即看到近期历史 run（不只是本次会话的）
   let seed: RunProgressSnapshot[] | undefined

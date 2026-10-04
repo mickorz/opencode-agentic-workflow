@@ -62,6 +62,88 @@ export function toProgressSnapshot(run: WorkflowRun): RunProgressSnapshot {
   }
 }
 
+/** 值 -> 单行预览（字符串直用，其余 JSON 化；超长截断加 …） */
+function previewValue(value: unknown, max: number): string {
+  if (value === undefined) return ""
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
+  const collapsed = text.replace(/\s+/g, " ").trim()
+  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max)}…`
+}
+
+/** 步骤详情（journal 全量记录的 RPC 投影：输出/错误/耗时预览） */
+export interface RunStepDetail {
+  index: number
+  name?: string
+  status: string
+  startedAt?: number
+  completedAt?: number
+  /** 步骤输入预览（≤200 字符） */
+  input?: string
+  /** 步骤输出预览（≤500 字符） */
+  output?: string
+  /** 失败摘要 "Name: message"（≤300 字符） */
+  error?: string
+}
+
+/** run 详情（P2-8b 节点详情 RPC 载荷：journal 单读，含预览化的步骤载荷） */
+export interface RunDetail {
+  runId: string
+  workflow: { id: string; version: string }
+  status: string
+  startedAt: number
+  completedAt?: number
+  /** run 级失败摘要（≤300 字符） */
+  failure?: string
+  parentRunId?: string
+  depth?: number
+  /** args 预览（≤200 字符；重建执行的最小上下文） */
+  args?: string
+  steps: RunStepDetail[]
+}
+
+/** run -> 详情（journal 事实源；载荷只做预览化，绝不放大体输出） */
+export function toRunDetail(run: WorkflowRun): RunDetail {
+  return {
+    runId: run.runId,
+    workflow: { id: run.workflow.id, version: run.workflow.version },
+    status: run.status,
+    startedAt: run.startedAt,
+    ...(run.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
+    ...(run.failure !== undefined
+      ? {
+          failure: previewValue(
+            `${run.failure.name}: ${run.failure.message}`,
+            300,
+          ),
+        }
+      : {}),
+    ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
+    ...(run.depth !== undefined ? { depth: run.depth } : {}),
+    ...(run.args !== undefined ? { args: previewValue(run.args, 200) } : {}),
+    steps: run.steps.map((step) => ({
+      index: step.index,
+      ...(step.name !== undefined ? { name: step.name } : {}),
+      status: step.status,
+      ...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
+      ...(step.completedAt !== undefined ? { completedAt: step.completedAt } : {}),
+      ...(step.input !== undefined && previewValue(step.input, 200) !== ""
+        ? { input: previewValue(step.input, 200) }
+        : {}),
+      ...(step.output !== undefined && previewValue(step.output, 500) !== ""
+        ? { output: previewValue(step.output, 500) }
+        : {}),
+      ...(step.error !== undefined
+        ? {
+            error: previewValue(
+              `${step.error.name}: ${step.error.message}`,
+              300,
+            ),
+          }
+        : {}),
+    })),
+  }
+}
+
 export class RunJournal {
   private constructor(
     private readonly store: ExecutionStore,
