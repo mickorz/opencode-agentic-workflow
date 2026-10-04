@@ -333,6 +333,32 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 
 **`workflow_metrics`** —— 只读查询本服务累计指标（`format: "text" | "json"`）。
 
+## Skills
+
+npm 包内附两个 agent skill（`skills/` 目录，随包分发），教主 agent 用上面的工具
+完成「定义流程」与「迭代优化」两类高频任务：
+
+| Skill | 触发场景 |
+|-------|----------|
+| `workflow-authoring` | 「帮我定义/创建一个 workflow」「给流程加步骤/参数」「workflow_define 报错了」——从需求澄清到声明式 JSON 构造、落盘注册、试跑验证的完整链路 |
+| `workflow-optimize` | 「这个流程跑得慢/贵/老失败」「优化迭代一下」「对比改动前后」——metrics/journal 诊断 → 单主题改动 → 升版重定义 → 同参重跑 → 对比报告 |
+
+启用方式（二选一）：
+
+```jsonc
+// 方式一（推荐，零拷贝）：opencode.json 里把包内 skills 目录挂进 skills 数组
+{
+  "plugins": [{ "package": "opencode-agentic-workflow", "options": { "...": "..." } }],
+  "skills": ["node_modules/opencode-agentic-workflow/skills"]
+}
+
+// 方式二：把 skills/ 下的子目录拷进 .opencode/skills/（项目级）
+// 或 ~/.config/opencode/skills/（全局）
+```
+
+挂载后 agent 会在相关请求时自动加载；也可在 prompt 里显式 `@workflow-authoring`
+指定。
+
 ## Journal 数据模型
 
 `<journalDir>/<runId>.json`（每次状态变更原子落盘）：

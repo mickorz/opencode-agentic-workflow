@@ -104,9 +104,15 @@
     声明式 verify 步与代码式 `verify()` 同步支持；协议失败（解析重试耗尽）
     与语义否决的既有分离不变。测试 +8（全量 264/264）；E2E：声明式
     lenses+threshold 实跑 completed、双视角真实评审员、产物落盘。
-12. **Skills 打包分发**（S）——v1：workflow-authoring（DSL 参考）+ workflow-optimize
-    （迭代优化闭环）两个 skill 随装。v2：docs/ 已有人向指南；skill 形态（面向
-    agent 消费）与 P0-2 的生成链路天然配套。
+12. ~~**Skills 打包分发**（S）~~ ✅ **已完成（2026-10-05，随 0.5.0 发布）**——
+    `skills/workflow-authoring`（需求澄清 → 声明式 JSON 构造 → workflow_define
+    落盘注册 → 试跑验证，含必守纪律与报错速查表）与 `skills/workflow-optimize`
+    （metrics/journal 诊断 → 单主题改动 → 升版重定义 → 同参重跑 → 对比报告）
+    两个 agent skill 随 npm 包分发（package.json files += "skills"；启用 =
+    opencode.json `skills` 数组直连包内目录，零拷贝）。结构校验测试 +2
+    （frontmatter/命名/描述长度，全量 266/266）；E2E：skills 数组挂载 →
+    主 agent 加载技能并遵循（定义的流程 prompt 含技能要求的递归防护句）→
+    workflow_define 落盘 → 试跑 completed、产物在。
 
 ## 三、有意不回抄（v2 设计取态，防摇摆记录）
 

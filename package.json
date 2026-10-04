@@ -28,7 +28,8 @@
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "publishConfig": {
     "access": "public"
