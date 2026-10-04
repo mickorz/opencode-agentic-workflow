@@ -51,7 +51,8 @@ while kill -0 "$PID" 2>/dev/null; do
 done
 STATUS=0
 wait "$PID" || STATUS=$?
-kill "$WD" 2>/dev/null; wait "$WD" 2>/dev/null
+kill "$WD" 2>/dev/null || true
+wait "$WD" 2>/dev/null || true
 
 echo "----------------------------------------"
 if [ "$STATUS" -eq 0 ]; then

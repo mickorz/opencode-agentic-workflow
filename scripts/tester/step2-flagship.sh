@@ -84,7 +84,8 @@ while kill -0 "$PID" 2>/dev/null; do
 done
 STATUS=0
 wait "$PID" || STATUS=$?
-kill "$WD" 2>/dev/null; wait "$WD" 2>/dev/null
+kill "$WD" 2>/dev/null || true
+wait "$WD" 2>/dev/null || true
 
 echo "[3/3] 结果核验："
 echo "----------------------------------------"
@@ -103,7 +104,7 @@ fi
 BRANCH="$(git branch --list 'agw/*' | head -1 | tr -d ' +')"
 if [ -n "$BRANCH" ] && [ "$STATUS" -eq 0 ]; then
   echo "✅ 交付分支：$BRANCH"
-  git show --stat --format='%h %s' "$BRANCH" | head -8
+  git show --stat --format='%h %s' "$BRANCH" | head -8 || true
   echo "----------------------------------------"
   echo "引入实现：git merge $BRANCH"
   echo "演示目录（可直接删）：$DIR"

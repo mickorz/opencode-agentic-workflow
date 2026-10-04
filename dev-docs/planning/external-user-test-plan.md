@@ -120,3 +120,4 @@ Troubleshooting，按性质分流——与五连坑分类法一致）。
 |---|---|---|---|---|
 | 1 | michaelchang@192（作者自测，2026-10-04） | 「[2/2] 之后零输出，卡住」——实为正常运行（进程活着、workflow 执行中），纯脚本反馈缺失 | 脚本 UX | **当场修**：两脚本加进度心跳（45/60s 打印已运行时长+最近输出，ANSI 已清洗） |
 | 2 | michaelchang@192（作者自测，2026-10-04） | step2 首次心跳即 `tr: Illegal byte sequence`，set -e 杀死脚本退出（后台 workflow 不受影响，实际已 5/5 完成交付） | 脚本 bug | **当场修**：`tail -c` 按字节切断中文多字节字符 → tr 必须逐字节处理（`LC_ALL=C tr`）；macOS `iconv -c` 丢无效字节后仍 exit 1 → 整条心跳管线 `|| :` 兜底。对抗测试（非法字节+pipefail 下心跳 ×3）通过后才入库 |
+| 3 | michaelchang@192（作者自测，2026-10-04） | 两次脚本壳**静默退出**（心跳后无 ✅/❌ 结果块）①当前版：`wait "$WD"` 收割被 kill 的看门狗返回 143，set -e 无保护 → 静默死亡（负向对照实验证实 exit=143）；②一次重跑仍报旧 tr 错 = raw.githubusercontent CDN 缓存旧版 | 脚本 bug + **验证纪律** | **当场修**：清理行全部 `|| true`；step2 `git show \| head` 补 SIGPIPE 保护（pipefail 下提前关管必死）。**教训：脚本修复必须完整 E2E**——wait-reap 修复当时只做了无 set -e 的迷你验证，原 E2E 跑的是修复前版本，两次单元验证都漏了集成层。三次孤儿 workflow 全部 5/5 完成（引擎与壳解耦的连续实证） |
