@@ -88,6 +88,17 @@ const runDetailSchema = {
           input: { type: "string" },
           output: { type: "string" },
           error: { type: "string" },
+          usage: {
+            type: "object",
+            properties: {
+              input: { type: "number" },
+              output: { type: "number" },
+              reasoning: { type: "number" },
+            },
+            required: ["input", "output", "reasoning"],
+            additionalProperties: false,
+          },
+          model: { type: "string" },
         },
         required: ["index", "status"],
       },

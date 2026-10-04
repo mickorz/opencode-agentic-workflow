@@ -24,7 +24,12 @@ export type WorkflowEvent = WorkflowEventBase &
     | { type: "workflow.completed"; workflowId: string; durationMs: number }
     | { type: "workflow.failed"; workflowId: string; error: string }
     | { type: "phase.started"; name: string }
-    | { type: "agent.started"; promptPreview: string }
+    | {
+        type: "agent.started"
+        promptPreview: string
+        /** 发出调用的 run（P2-8b 步骤元数据；run 作用域外省略） */
+        runId?: string
+      }
     | {
         type: "agent.completed"
         durationMs: number
@@ -35,8 +40,16 @@ export type WorkflowEvent = WorkflowEventBase &
         costUSD?: number
         /** 实际使用的模型 "providerID/id" */
         model?: string
+        /** 完成调用的 run（journal 侧聚合到 currentStep） */
+        runId?: string
       }
-    | { type: "agent.failed"; durationMs: number; error: string }
+    | {
+        type: "agent.failed"
+        durationMs: number
+        error: string
+        /** 失败调用的 run（trace 按 run 过滤用） */
+        runId?: string
+      }
     | { type: "check.completed"; label: string; ok: boolean }
     | {
         type: "verify.completed"

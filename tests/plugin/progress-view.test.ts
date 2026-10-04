@@ -231,3 +231,31 @@ test("renderDetailSection: 仅当缓存的详情属于板上最新 run 时输出
     "b",
   ])
 })
+
+test("renderDetailLines: 步骤 token/模型元数据后缀", () => {
+  const detail: RunDetail = {
+    runId: "run_m",
+    workflow: { id: "w", version: "1.0.0" },
+    status: "completed",
+    startedAt: 0,
+    completedAt: 1000,
+    steps: [
+      {
+        index: 0,
+        name: "gather",
+        status: "completed",
+        startedAt: 0,
+        completedAt: 1000,
+        output: "o",
+        usage: { input: 1200, output: 300, reasoning: 0 },
+        model: "glm/glm-5.3-flash",
+      },
+      { index: 1, name: "check", status: "completed", startedAt: 1000, completedAt: 1000 },
+    ],
+  }
+  const lines = renderDetailLines(detail, 1000)
+  assert.equal(lines[2], "  ✓ gather  1.0s  · 1.5k tok · glm/glm-5.3-flash")
+  assert.equal(lines[3], "    → o")
+  // 无元数据步骤不加后缀（0 时长按 "0s"）
+  assert.equal(lines[4], "  ✓ check  0s")
+})

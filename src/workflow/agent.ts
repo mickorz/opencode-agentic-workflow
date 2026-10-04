@@ -17,6 +17,7 @@
 
 import type { AgentResult } from "../runtime/executor.js"
 import { requireExecutor } from "../runtime/engine.js"
+import { currentRunContext } from "../runtime/run-context.js"
 import { emitEvent, preview } from "../observability/events.js"
 import { currentWorkspace } from "../workspace/ambient.js"
 import { validateArgs, type ArgsSchema } from "../registry/schema.js"
@@ -136,7 +137,11 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
   const retries = options.retries ?? 0
   const retryDelayMs = options.retryDelayMs ?? 0
 
-  emitEvent({ type: "agent.started", promptPreview: preview(prompt) })
+  // runId 标注（P2-8b）：run 作用域内的调用可被 journal 侧聚合到 currentStep；
+  // 作用域外（inline 无 journal 等）省略
+  const runId = currentRunContext()?.runId
+
+  emitEvent({ type: "agent.started", promptPreview: preview(prompt), ...(runId ? { runId } : {}) })
   const startedAt = Date.now()
   try {
     const result = await withRetries(
@@ -166,6 +171,7 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
       usage: result.usage,
       costUSD: result.costUSD,
       model: result.model,
+      ...(runId ? { runId } : {}),
     })
     return result
   } catch (error) {
@@ -173,6 +179,7 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
       type: "agent.failed",
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
+      ...(runId ? { runId } : {}),
     })
     throw error
   }

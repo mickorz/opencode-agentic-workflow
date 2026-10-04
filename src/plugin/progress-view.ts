@@ -200,6 +200,12 @@ function wrapPreview(
   return chunks
 }
 
+/** token 数 -> 紧凑人读（123 / 1.2k / 15.3k） */
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n)))
+  return `${(n / 1000).toFixed(1)}k`
+}
+
 export interface DetailLinesOptions {
   /** 行宽上限（截断加 …）；默认不截断 */
   maxWidth?: number
@@ -242,9 +248,18 @@ export function renderDetailLines(
       step.startedAt !== undefined
         ? `  ${formatDuration(Math.max(0, (step.completedAt ?? now) - step.startedAt))}`
         : ""
+    // P2-8b 元数据后缀：模型 + token 合计（input+output+reasoning；reasoning
+    // 已含于 output 时宿主报 0，不会重复计）
+    const meta: string[] = []
+    if (step.usage !== undefined) {
+      const total = step.usage.input + step.usage.output + step.usage.reasoning
+      meta.push(`${formatTokens(total)} tok`)
+    }
+    if (step.model !== undefined) meta.push(step.model)
+    const metaSuffix = meta.length > 0 ? `  · ${meta.join(" · ")}` : ""
     lines.push(
       truncate(
-        `  ${stepGlyph(step.status)} ${step.name ?? `step ${step.index}`}${stepDuration}`,
+        `  ${stepGlyph(step.status)} ${step.name ?? `step ${step.index}`}${stepDuration}${metaSuffix}`,
         maxWidth,
       ),
     )

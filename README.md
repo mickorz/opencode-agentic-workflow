@@ -401,9 +401,12 @@ Agentic Workflow
 ```
 
 面板下半区是**节点详情**（P2-8b）：最新 run 的 journal 单读投影——runId /
-args 预览 / 每步骤的输出或错误预览（折行 + 截断）/ 步骤与总时长。详情经
-`agentic-workflow-progress` RPC 的 `detail` 方法拉取（同一状态只拉一次，
-终态转换再拉一次收尾）；未配置 `journalDir` 时详情区静默缺省，面板其余不受影响。
+args 预览 / 每步骤的输出或错误预览（折行 + 截断）/ 步骤与总时长，以及
+**步骤级 token/模型元数据**（agent 步显示 `· 1.5k tok · glm/glm-5.3-flash`
+后缀；同一 run 的 agent 调用按 runId 聚合到所在步骤，subflow 互不串账）。
+详情经 `agentic-workflow-progress` RPC 的 `detail` 方法拉取（同一状态只拉
+一次，终态转换再拉一次收尾）；未配置 `journalDir` 时详情区静默缺省，
+面板其余不受影响。
 
 数据链路：RunJournal 状态转换 → `run.progress` 事件总线 → ProgressBoard（容量 20，
 journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RPC。headless

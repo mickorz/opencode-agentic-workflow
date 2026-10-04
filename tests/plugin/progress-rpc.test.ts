@@ -127,3 +127,28 @@ test("parseRunDetail: null（无 journal/未知 run）与不合法形状拒绝",
   assert.equal(parseRunDetail({ run: { ...base, steps: [{ status: "x" }] } }), undefined)
   assert.equal(parseRunDetail({ run: { ...base, steps: "x" } }), undefined)
 })
+
+test("parseRunDetail: 透传步骤 usage/model 元数据", () => {
+  const output = {
+    run: {
+      runId: "run_1",
+      workflow: { id: "demo", version: "1.0.0" },
+      status: "completed",
+      startedAt: 1,
+      steps: [
+        {
+          index: 0,
+          status: "completed",
+          usage: { input: 1, output: 2, reasoning: 3 },
+          model: "m/x",
+        },
+      ],
+    },
+  }
+  assert.deepEqual(parseRunDetail(output)?.steps[0]?.usage, {
+    input: 1,
+    output: 2,
+    reasoning: 3,
+  })
+  assert.equal(parseRunDetail(output)?.steps[0]?.model, "m/x")
+})

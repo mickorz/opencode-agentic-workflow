@@ -28,6 +28,13 @@ export interface StepErrorRecord {
   message: string
 }
 
+/** 步骤内 agent 调用的 token 用量累计（P2-8b；agent.completed 事件聚合） */
+export interface StepUsage {
+  input: number
+  output: number
+  reasoning: number
+}
+
 /** workflow 版本身份：resume 必须经 registry 解析到精确版本，绝不隐式取最新 */
 export interface WorkflowIdentity {
   id: string
@@ -45,6 +52,10 @@ export interface WorkflowIdentity {
   output?: unknown
   /** 失败信息 */
   error?: StepErrorRecord
+  /** 步骤内 agent 调用 token 累计（P2-8b 元数据；多 agent 步求和） */
+  usage?: StepUsage
+  /** 步骤内最后一次 agent 调用的模型（P2-8b 元数据） */
+  model?: string
   startedAt?: number
   completedAt?: number
 }

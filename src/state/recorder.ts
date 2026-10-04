@@ -22,7 +22,11 @@ import {
 } from "./journal.js"
 import type { ExecutionStore } from "./store.js"
 import type { WorkspaceIdentity } from "../workspace/provider.js"
-import { emitEvent, type RunProgressSnapshot } from "../observability/events.js"
+import {
+  emitEvent,
+  getEventBus,
+  type RunProgressSnapshot,
+} from "../observability/events.js"
 
 export interface JournalStartInput {
   workflow: WorkflowIdentity
@@ -70,7 +74,7 @@ function previewValue(value: unknown, max: number): string {
   return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max)}…`
 }
 
-/** 步骤详情（journal 全量记录的 RPC 投影：输出/错误/耗时预览） */
+/** 步骤详情（journal 全量记录的 RPC 投影：输出/错误/耗时/token/模型预览） */
 export interface RunStepDetail {
   index: number
   name?: string
@@ -83,6 +87,10 @@ export interface RunStepDetail {
   output?: string
   /** 失败摘要 "Name: message"（≤300 字符） */
   error?: string
+  /** 步骤内 agent 调用 token 累计（P2-8b 元数据） */
+  usage?: { input: number; output: number; reasoning: number }
+  /** 步骤内最后一次 agent 调用的模型（P2-8b 元数据） */
+  model?: string
 }
 
 /** run 详情（P2-8b 节点详情 RPC 载荷：journal 单读，含预览化的步骤载荷） */
@@ -140,6 +148,8 @@ export function toRunDetail(run: WorkflowRun): RunDetail {
             ),
           }
         : {}),
+      ...(step.usage !== undefined ? { usage: step.usage } : {}),
+      ...(step.model !== undefined ? { model: step.model } : {}),
     })),
   }
 }
@@ -150,18 +160,48 @@ export class RunJournal {
     readonly run: WorkflowRun,
   ) {}
 
+  /**
+   * P2-8b 步骤元数据：订阅 agent.completed（runId 过滤）聚合 token/模型
+   * 到 currentStep。事件同步 fan-out，先于 stepCompleted 落盘——无需
+   * 额外持久化钩子。终态退订防泄漏；reopen 重新订阅。
+   */
+  private offUsageMeta: (() => void) | undefined
+
+  private subscribeUsageMeta(): void {
+    this.offUsageMeta?.()
+    this.offUsageMeta = getEventBus().subscribe((event) => {
+      if (event.type !== "agent.completed") return
+      if (event.runId !== this.run.runId) return
+      const step = this.run.steps[this.run.currentStep]
+      if (!step || step.status !== "running") return
+      if (event.usage) {
+        step.usage = {
+          input: (step.usage?.input ?? 0) + (event.usage.input ?? 0),
+          output: (step.usage?.output ?? 0) + (event.usage.output ?? 0),
+          reasoning: (step.usage?.reasoning ?? 0) + (event.usage.reasoning ?? 0),
+        }
+      }
+      if (event.model) step.model = event.model
+    })
+  }
+
   /** 创建新 run 并持久化初始状态 */
   static async start(store: ExecutionStore, input: JournalStartInput): Promise<RunJournal> {
     const run = createRun(input)
     await store.createRun(run)
     emitEvent({ type: "run.progress", run: toProgressSnapshot(run) })
-    return new RunJournal(store, run)
+    const journal = new RunJournal(store, run)
+    journal.subscribeUsageMeta()
+    return journal
   }
 
   /** 附加到已有 run（resume 场景：读取历史 journal 继续记录）；不存在返回 undefined */
   static async attach(store: ExecutionStore, runId: string): Promise<RunJournal | undefined> {
     const run = await store.getRun(runId)
-    return run ? new RunJournal(store, run) : undefined
+    if (!run) return undefined
+    const journal = new RunJournal(store, run)
+    journal.subscribeUsageMeta()
+    return journal
   }
 
   private assertOpen(): void {
@@ -220,6 +260,8 @@ export class RunJournal {
     this.run.status = "completed"
     this.run.completedAt = Date.now()
     await this.store.saveRun(this.run)
+    this.offUsageMeta?.()
+    this.offUsageMeta = undefined
     this.emitProgress()
   }
 
@@ -233,6 +275,8 @@ export class RunJournal {
       if (step.status === "pending") step.status = "skipped"
     }
     await this.store.saveRun(this.run)
+    this.offUsageMeta?.()
+    this.offUsageMeta = undefined
     this.emitProgress()
   }
 
@@ -251,6 +295,8 @@ export class RunJournal {
       if (step.status !== "completed" && step.status !== "failed") step.status = "skipped"
     }
     await this.store.saveRun(this.run)
+    this.offUsageMeta?.()
+    this.offUsageMeta = undefined
     this.emitProgress()
   }
 
@@ -294,11 +340,14 @@ export class RunJournal {
         step.error = undefined
         step.input = undefined
         step.output = undefined
+        step.usage = undefined
+        step.model = undefined
         step.startedAt = undefined
         step.completedAt = undefined
       }
     }
     await this.store.saveRun(this.run)
+    this.subscribeUsageMeta()
     this.emitProgress()
   }
 }

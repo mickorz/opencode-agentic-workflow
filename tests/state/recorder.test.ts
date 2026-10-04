@@ -11,7 +11,7 @@ import { test } from "node:test"
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import type { ExecutionStore } from "../../src/state/store.js"
 import { RunJournal, toRunDetail } from "../../src/state/recorder.js"
-import { createEventBus, setEventBus } from "../../src/observability/events.js"
+import { createEventBus, emitEvent, setEventBus } from "../../src/observability/events.js"
 
 let baseDir: string
 let store: ExecutionStore
@@ -246,6 +246,103 @@ test("toRunDetail: 预览化载荷（截断/错误摘要/lineage/args）", async
     assert.ok((detail.failure?.length ?? 0) <= 301)
     // 失败步骤无 output 键（错误与输出互斥呈现）
     assert.equal("output" in (detail.steps[1] ?? {}), false)
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("P2-8b 步骤元数据：agent.completed 按 runId 聚合到 currentStep（隔离/累计/退订）", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.0.0" },
+      stepCount: 2,
+      stepNames: ["gather", "verify"],
+      runId: "run_meta",
+    })
+    await journal.stepStarted(0)
+    // 他 run 的事件不落
+    emitEvent({
+      type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_other",
+      model: "other/model",
+      usage: { input: 999, output: 999, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    // 无 runId（run 作用域外，如 inline）不落
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, model: "x/y" })
+    // 本 run 第一笔
+    emitEvent({
+      type: "agent.completed", durationMs: 10, outputLength: 10, runId: "run_meta",
+      model: "glm/glm-5.3-flash",
+      usage: { input: 100, output: 40, reasoning: 10, cache: { read: 0, write: 0 } },
+    })
+    // 本 run 第二笔（同步骤累计；模型取最后）
+    emitEvent({
+      type: "agent.completed", durationMs: 8, outputLength: 8, runId: "run_meta",
+      model: "glm/glm-5.3-air",
+      usage: { input: 50, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    await journal.stepCompleted(0, "done")
+
+    let loaded = await store.getRun("run_meta")
+    assert.deepEqual(loaded?.steps[0]?.usage, { input: 150, output: 60, reasoning: 10 })
+    assert.equal(loaded?.steps[0]?.model, "glm/glm-5.3-air")
+
+    // 第二步无元数据（无 agent 事件对应）
+    await journal.stepStarted(1)
+    await journal.stepCompleted(1, "ok")
+    loaded = await store.getRun("run_meta")
+    assert.equal(loaded?.steps[1]?.usage, undefined)
+    assert.equal(loaded?.steps[1]?.model, undefined)
+
+    // 终态退订：complete 后再派事件——不炸、不变
+    await journal.complete()
+    emitEvent({
+      type: "agent.completed", durationMs: 1, outputLength: 1, runId: "run_meta",
+      usage: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    loaded = await store.getRun("run_meta")
+    assert.equal(loaded?.steps[0]?.usage?.input, 150)
+
+    // detail 投影含元数据
+    const detail = toRunDetail(journal.run)
+    assert.deepEqual(detail.steps[0]?.usage, { input: 150, output: 60, reasoning: 10 })
+    assert.equal(detail.steps[0]?.model, "glm/glm-5.3-air")
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("P2-8b reopen 重订：failed run reopen 后元数据重新聚合", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.0.0" },
+      stepCount: 1,
+      stepNames: ["only"],
+      runId: "run_meta2",
+    })
+    await journal.stepStarted(0)
+    const boom = new Error("first attempt failed")
+    await journal.stepFailed(0, boom)
+    await journal.fail(boom)
+    assert.equal(journal.run.status, "failed")
+
+    await journal.reopen()
+    // 非完成步骤重置：元数据一并清空
+    assert.equal(journal.run.steps[0]?.usage, undefined)
+    assert.equal(journal.run.steps[0]?.model, undefined)
+
+    await journal.stepStarted(0)
+    emitEvent({
+      type: "agent.completed", durationMs: 4, outputLength: 4, runId: "run_meta2",
+      model: "glm/glm-5.3-flash",
+      usage: { input: 7, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    await journal.stepCompleted(0, "ok2")
+    await journal.complete()
+    assert.deepEqual(journal.run.steps[0]?.usage, { input: 7, output: 3, reasoning: 0 })
   } finally {
     setEventBus(createEventBus())
   }

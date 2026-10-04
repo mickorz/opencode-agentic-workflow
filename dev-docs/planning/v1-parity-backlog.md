@@ -105,8 +105,10 @@
    RPC 加 `detail` 方法（journal 单读 → `toRunDetail` 预览化投影：args/步骤
    输出/错误/时长，500/300/200 字符截断），TUI 面板下半区渲染最新 run 的
    详情（`renderDetailLines` 纯函数 + runId@status 去重拉取 + 慢回包竞态守卫）；
-   模型 token 元数据/Open Session 回放仍未做（前者需 agent 事件带 runId +
-   journal 侧聚合，记入后续缺口；后者依赖宿主 API）。面板视觉需
+   **步骤级 token/模型元数据同日补齐**：agent 事件带 runId（ALS 作用域），
+   RunJournal 订阅聚合 `agent.completed` 的 usage/model 到 currentStep
+   （终态退订、reopen 重订、StepRecord 增 usage/model 字段，subflow 互不
+   串账）。Open Session 回放仍未做（依赖宿主 API，记入后续缺口）。面板视觉需
    交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配；
    详情渲染函数对真实 journal 的输出有 E2E 快照）。
 9. ~~**嵌套工作流**（L，架构前置）~~ **已闭环（2026-10-06，P2-9）**——

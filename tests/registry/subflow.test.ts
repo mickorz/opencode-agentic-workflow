@@ -19,6 +19,10 @@ import {
 import { WorkflowExecutionError } from "../../src/registry/errors.js"
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import type { ExecutionStore } from "../../src/state/store.js"
+import { setExecutor } from "../../src/runtime/engine.js"
+import type { AgentTask } from "../../src/runtime/executor.js"
+import { agent } from "../../src/workflow/agent.js"
+import { createEventBus, setEventBus } from "../../src/observability/events.js"
 import { setCheckpointGate } from "../../src/quality/checkpoint.js"
 import { checkpoint } from "../../src/quality/checkpoint.js"
 import { PolicyCheckpointGate } from "../../src/plugin/policy-checkpoint-gate.js"
@@ -249,4 +253,77 @@ test("workspace 继承 + 回归：子 run 不清掉父 run 的工作区环境", 
   // 父 run 的工作区（FakeProvider 按 runId 建目录）在子 run 前后一致可见
   assert.ok(seen[0]?.startsWith(base), `first=${seen[0]}`)
   assert.equal(seen[1], seen[0])
+})
+
+test("P2-8b 集成：agent() 事件带 runId 聚合到各自 journal（subflow 互不串账）", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    // executor 回传 usage + model（走真实 agent() -> emitEvent -> journal 订阅链）
+    setExecutor({
+      async execute(task: AgentTask) {
+        return {
+          output: `out:${task.prompt}`,
+          usage: { input: 11, output: 4, reasoning: 1, cache: { read: 0, write: 0 } },
+          model: "glm/glm-5.3-flash",
+        }
+      },
+    })
+    const topicSchema = {
+      type: "object",
+      properties: { topic: { type: "string" } },
+      required: ["topic"],
+    }
+    // 注意：def() 直跑步骤不经 ctx.runSteps（journal 无步骤记录）——本测试
+    // 需要 journal 步骤账本，故用 runSteps 包装（runner.test.ts makeDef 模式）
+    const registry = makeRegistry()
+    registry.register({
+      id: "meta-child",
+      version: "1.0.0",
+      description: "child",
+      argsSchema: topicSchema,
+      stepNames: ["child-agent"],
+      async run(_args: unknown, ctx: Ctx) {
+        const state = (await ctx.runSteps([
+          async () => (await agent("child-prompt")).output,
+        ])) as { "child-agent"?: string } | undefined
+        return { output: `child:${state?.["child-agent"] ?? ""}` }
+      },
+    })
+    let childRunId = ""
+    registry.register({
+      id: "meta-parent",
+      version: "1.0.0",
+      description: "parent",
+      stepNames: ["parent-agent", "spawn"],
+      async run(_args: unknown, ctx: Ctx) {
+        const child = await ctx.subflow!("meta-child", { topic: "t" })
+        childRunId = child.runId
+        const state = (await ctx.runSteps([
+          async () => (await agent("parent-prompt")).output,
+          async () => child.output,
+        ])) as Record<string, unknown> | undefined
+        return { output: `parent:${JSON.stringify(state ?? {})}` }
+      },
+    })
+
+    const result = await startWorkflow(registry, store, "meta-parent", { topic: "t" })
+    const parent = await store.getRun(result.runId)
+    assert.equal(parent?.status, "completed")
+
+    // 父步骤 0（自己的 agent 调用）：元数据落账
+    assert.deepEqual(parent?.steps[0]?.usage, { input: 11, output: 4, reasoning: 1 })
+    assert.equal(parent?.steps[0]?.model, "glm/glm-5.3-flash")
+    // 父步骤 1（subflow 结果步）：子的 agent 不串到父账上
+    assert.equal(parent?.steps[1]?.usage, undefined)
+    assert.equal(parent?.steps[1]?.model, undefined)
+
+    // 子 journal：自己的 agent 元数据（runId 作用域隔离的正向证明）
+    const child = await store.getRun(childRunId)
+    assert.equal(child?.status, "completed")
+    assert.deepEqual(child?.steps[0]?.usage, { input: 11, output: 4, reasoning: 1 })
+    assert.equal(child?.steps[0]?.model, "glm/glm-5.3-flash")
+  } finally {
+    setEventBus(createEventBus())
+  }
 })
