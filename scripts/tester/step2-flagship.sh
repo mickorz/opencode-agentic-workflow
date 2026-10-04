@@ -62,7 +62,8 @@ cat > opencode.json <<EOF
 EOF
 
 echo "[1/3] 演示 git 项目就绪：$DIR"
-echo "[2/3] 运行 feature-development（check 阶段会 npm install，慢属正常）…"
+echo "[2/3] 运行 feature-development（全程约 10–15 分钟：check 阶段会 npm install，"
+echo "      慢属正常；每 60 秒打印一次进度心跳，请勿中断）…"
 
 TOPIC='在 src/greet.js 新增导出函数 greet(name)：name 为空或缺失时返回 "Hello, stranger!"，否则返回 "Hello, <name>!"。并在 tests/greet.test.js 用 node:test + assert/strict 编写单测，覆盖：正常名字、空字符串。代码风格参考现有 src/app.js'
 opencode run --model "$PROVIDER/$MODEL" \
@@ -70,6 +71,13 @@ opencode run --model "$PROVIDER/$MODEL" \
   > run.out 2>&1 &
 PID=$!
 ( sleep "$BUDGET"; pkill -P "$PID" 2>/dev/null; kill "$PID" 2>/dev/null ) & WD=$!
+START=$(date +%s)
+while kill -0 "$PID" 2>/dev/null; do
+  sleep 60
+  kill -0 "$PID" 2>/dev/null || break
+  LAST="$(tail -c 300 run.out 2>/dev/null | LC_ALL=C sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' | tr '\n' ' ' | tail -c 100)"
+  echo "  … 已运行 $(( $(date +%s) - START ))s（最近输出：${LAST:-尚无}）"
+done
 STATUS=0
 wait "$PID" || STATUS=$?
 kill "$WD" 2>/dev/null; wait "$WD" 2>/dev/null

@@ -30,13 +30,21 @@ cat > opencode.json <<EOF
 EOF
 
 echo "[1/2] 最小配置完成：$DIR"
-echo "[2/2] 运行 smoke（首次会从 npm 下载插件，需要网络，请稍候）…"
+echo "[2/2] 运行 smoke（首次会从 npm 下载插件，需要网络；全程约 2–5 分钟，"
+echo "      每 45 秒打印一次进度心跳，请勿中断）…"
 
 opencode run --model "$PROVIDER/$MODEL" \
   "调用 workflow 工具：flow=smoke, topic=Rust 内存安全。完成后报告输出。" \
   > smoke.out 2>&1 &
 PID=$!
 ( sleep "$BUDGET"; pkill -P "$PID" 2>/dev/null; kill "$PID" 2>/dev/null ) & WD=$!
+START=$(date +%s)
+while kill -0 "$PID" 2>/dev/null; do
+  sleep 45
+  kill -0 "$PID" 2>/dev/null || break
+  LAST="$(tail -c 300 smoke.out 2>/dev/null | LC_ALL=C sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' | tr '\n' ' ' | tail -c 100)"
+  echo "  … 已运行 $(( $(date +%s) - START ))s（最近输出：${LAST:-尚无}）"
+done
 STATUS=0
 wait "$PID" || STATUS=$?
 kill "$WD" 2>/dev/null; wait "$WD" 2>/dev/null
