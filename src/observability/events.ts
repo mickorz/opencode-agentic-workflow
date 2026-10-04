@@ -44,6 +44,8 @@ export type WorkflowEvent = WorkflowEventBase &
         passed: boolean
         passedCount: number
         totalCount: number
+        /** P2-11：投票阈值 < 1 时携带（默认全票不附） */
+        threshold?: number
       }
     | {
         /** v0.3.1 坑 3：reviewer 协议失败（解析重试耗尽）——非语义否决 */

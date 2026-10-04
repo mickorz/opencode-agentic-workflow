@@ -39,7 +39,16 @@ interface CheckpointStepDecl {
 }
 interface VerifyStepDecl {
   name: string
-  verify: { artifact: string; criteria?: string; reviewers?: number; label?: string }
+  verify: {
+    artifact: string
+    criteria?: string
+    reviewers?: number
+    label?: string
+    /** P2-11：投票阈值 (0,1]，缺省 1 = 全票 */
+    threshold?: number
+    /** P2-11：多视角评审（一个 lens 一个评审员，覆盖 reviewers/criteria） */
+    lenses?: Array<{ name: string; criteria: string }>
+  }
 }
 interface FileExistsStepDecl {
   name: string
@@ -160,16 +169,40 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
     if (kind === "verify") {
       const v = step.verify
       if (typeof v !== "object" || v === null || typeof (v as Record<string, unknown>).artifact !== "string") {
-        return { ok: false, error: at(`steps[${index}].verify must be { artifact: string, criteria?, reviewers?, label? }`) }
+        return { ok: false, error: at(`steps[${index}].verify must be { artifact: string, criteria?, reviewers?, label?, threshold?, lenses? }`) }
       }
       const vo = v as Record<string, unknown>
       for (const k of Object.keys(vo)) {
-        if (!["artifact", "criteria", "reviewers", "label"].includes(k)) {
+        if (!["artifact", "criteria", "reviewers", "label", "threshold", "lenses"].includes(k)) {
           return { ok: false, error: at(`steps[${index}].verify has unknown key "${k}"`) }
         }
       }
       if (vo.reviewers !== undefined && typeof vo.reviewers !== "number") {
         return { ok: false, error: at(`steps[${index}].verify.reviewers must be a number`) }
+      }
+      // P2-11 投票阈值：数值且在 (0, 1]
+      if (
+        vo.threshold !== undefined &&
+        (typeof vo.threshold !== "number" || !Number.isFinite(vo.threshold) || vo.threshold <= 0 || vo.threshold > 1)
+      ) {
+        return { ok: false, error: at(`steps[${index}].verify.threshold must be a number in (0, 1]`) }
+      }
+      // P2-11 多视角：非空数组，每项 { name, criteria } 均为非空字符串
+      if (vo.lenses !== undefined) {
+        if (!Array.isArray(vo.lenses) || vo.lenses.length === 0) {
+          return { ok: false, error: at(`steps[${index}].verify.lenses must be a non-empty array of { name, criteria }`) }
+        }
+        for (const [li, lens] of (vo.lenses as Array<unknown>).entries()) {
+          const lo = lens as Record<string, unknown>
+          if (typeof lo !== "object" || lo === null || typeof lo.name !== "string" || lo.name.length === 0 || typeof lo.criteria !== "string" || lo.criteria.length === 0) {
+            return { ok: false, error: at(`steps[${index}].verify.lenses[${li}] must be { name: non-empty string, criteria: non-empty string }`) }
+          }
+          for (const k of Object.keys(lo)) {
+            if (!["name", "criteria"].includes(k)) {
+              return { ok: false, error: at(`steps[${index}].verify.lenses[${li}] has unknown key "${k}"`) }
+            }
+          }
+        }
       }
     } else if (typeof step[kind] !== "string") {
       return { ok: false, error: at(`steps[${index}].${kind} must be a string (template)`) }
@@ -278,6 +311,11 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
               criteria: step.verify.criteria,
               reviewers: step.verify.reviewers,
               label: step.verify.label ?? step.name,
+              // P2-11：投票阈值 + 多视角透传
+              ...(step.verify.threshold !== undefined
+                ? { passThreshold: step.verify.threshold }
+                : {}),
+              ...(step.verify.lenses !== undefined ? { lenses: step.verify.lenses } : {}),
             })
             return { ...prev, [step.name]: result.passed ? "passed" : "failed" }
           }

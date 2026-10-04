@@ -97,9 +97,13 @@
 10. **Installer CLI**（S~M，等数据）——v1：`npx install/uninstall/update/doctor`
     （配置合并 + .bak + skills 安装）。v2：手改 opencode.json（README 已验证可行）。
     是否值得做等外部测试的安装卡点反馈。
-11. **verify 增强：lens 多视角 + threshold 投票**（S）——v1 的 reviewer 分配视角
-    （安全/性能/正确性…）与阈值投票制，作为 v2 全票制之外的**可选项**引入
-    （`mode: "unanimous" | "vote"`）。
+11. ~~**verify 增强：lens 多视角 + threshold 投票**（S）~~ ✅ **已完成（2026-10-05，
+    随 0.5.0 发布）**——`passThreshold`（(0,1] 投票阈值，缺省 1 = 全票/旧行为）
+    + `lenses: [{ name, criteria }]`（多视角：一个视角一个评审员、各按专属
+    标准评，覆盖 reviewers/criteria；与 threshold 组合成视角投票）。
+    声明式 verify 步与代码式 `verify()` 同步支持；协议失败（解析重试耗尽）
+    与语义否决的既有分离不变。测试 +8（全量 264/264）；E2E：声明式
+    lenses+threshold 实跑 completed、双视角真实评审员、产物落盘。
 12. **Skills 打包分发**（S）——v1：workflow-authoring（DSL 参考）+ workflow-optimize
     （迭代优化闭环）两个 skill 随装。v2：docs/ 已有人向指南；skill 形态（面向
     agent 消费）与 P0-2 的生成链路天然配套。

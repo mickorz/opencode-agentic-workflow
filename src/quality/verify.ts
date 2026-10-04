@@ -34,16 +34,36 @@ import { parseJsonLoose } from "./json.js"
 export interface ReviewVerdict {
   /** reviewer 序号（1 起） */
   reviewer: number
+  /** 评审视角名（lenses 模式下记录来源视角） */
+  lens?: string
   verdict: "pass" | "fail"
   summary: string
   issues: string[]
 }
 
+/** 多视角评审（P2-11）：每个 lens 独立一个评审员，只按自己的视角标准评 */
+export interface VerifyLens {
+  /** 视角名（如 correctness / completeness / style），进评审 prompt 与结论 */
+  name: string
+  /** 该视角的评审标准 */
+  criteria: string
+}
+
 export interface VerifyOptions {
-  /** 并行评审人数，默认 1；至少 1 */
+  /** 并行评审人数，默认 1；至少 1（lenses 存在时忽略，以 lenses 数为准） */
   reviewers?: number
   /** 验证标准（评审依据），例如「符合登录模块需求，无安全漏洞」 */
   criteria?: string
+  /**
+   * P2-11 投票阈值：pass 人数占比 >= threshold 才通过，默认 1（全票，
+   * 即旧行为）。取值 (0, 1]，如 0.5 = 多数决
+   */
+  passThreshold?: number
+  /**
+   * P2-11 多视角评审：每个 { name, criteria } 独立一个评审员。
+   * 存在时覆盖 reviewers 数量与全局 criteria（各视角只看自己的标准）
+   */
+  lenses?: VerifyLens[]
   /** 结果标签，默认 "semantic verify" */
   label?: string
   /** reviewer 协议容错：解析失败时的局部重试策略（默认 attempts=2） */
@@ -58,7 +78,7 @@ export interface ReviewerProtocolOptions {
 
 export interface VerifyResult {
   label: string
-  /** 所有 reviewer 均 pass 才为 true */
+  /** pass 人数占比 >= passThreshold（默认 1 = 全票）才为 true */
   passed: boolean
   verdicts: ReviewVerdict[]
 }
@@ -118,10 +138,17 @@ function buildReviewerPrompt(
   reviewerNo: number,
   reviewers: number,
   criteria?: string,
+  lens?: VerifyLens,
 ): string {
   return [
-    `你是第 ${reviewerNo}/${reviewers} 号独立评审员。请评审下面的产物，给出严格 JSON 结论。`,
-    criteria ? `评审标准：${criteria}` : "评审标准：产物完整、正确、可交付。",
+    lens
+      ? `你是「${lens.name}」视角评审员（第 ${reviewerNo}/${reviewers} 号）。只按本视角标准评审，给出严格 JSON 结论。`
+      : `你是第 ${reviewerNo}/${reviewers} 号独立评审员。请评审下面的产物，给出严格 JSON 结论。`,
+    lens
+      ? `评审标准（视角 ${lens.name}）：${lens.criteria}`
+      : criteria
+        ? `评审标准：${criteria}`
+        : "评审标准：产物完整、正确、可交付。",
     "",
     "=== 待评审产物 ===",
     artifact,
@@ -203,33 +230,47 @@ export async function verify(
   artifact: string | AgentResult | object,
   options?: VerifyOptions,
 ): Promise<VerifyResult> {
-  const reviewers = Math.max(1, Math.floor(options?.reviewers ?? 1))
+  const threshold = options?.passThreshold ?? 1
+  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) {
+    throw new Error("[agentic-workflow] verify passThreshold must be in (0, 1]")
+  }
+  // lenses 模式：一个视角一个评审员（覆盖 reviewers 数量与全局 criteria）
+  const slots: Array<{ no: number; lens?: VerifyLens }> =
+    options?.lenses && options.lenses.length > 0
+      ? options.lenses.map((lens, i) => ({ no: i + 1, lens }))
+      : Array.from({ length: Math.max(1, Math.floor(options?.reviewers ?? 1)) }, (_, i) => ({
+          no: i + 1,
+        }))
+  const reviewers = slots.length
   const label = options?.label ?? "semantic verify"
   const attempts = Math.max(1, Math.floor(options?.reviewerProtocol?.attempts ?? 2))
 
-  phase(`Verify(${label}, ${reviewers} reviewer${reviewers > 1 ? "s" : ""})`)
+  phase(
+    `Verify(${label}, ${reviewers} reviewer${reviewers > 1 ? "s" : ""}${slots[0]?.lens ? " (lenses)" : ""}${threshold < 1 ? `, threshold ${threshold}` : ""})`,
+  )
 
   const text = artifactToText(artifact)
 
   // 单 reviewer：仅解析失败局部重试（修复格式，不重新评审）；语义结论不重试
-  const runReviewer = async (no: number): Promise<ReviewerOutcome> => {
-    const basePrompt = buildReviewerPrompt(text, no, reviewers, options?.criteria)
+  const runReviewer = async (slot: { no: number; lens?: VerifyLens }): Promise<ReviewerOutcome> => {
+    const basePrompt = buildReviewerPrompt(text, slot.no, reviewers, options?.criteria, slot.lens)
     let lastRaw = ""
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const result = await agent(
         attempt === 1 ? basePrompt : buildRepairPrompt(basePrompt, lastRaw),
       )
       lastRaw = result.output
-      const verdict = toVerdict(no, result.output)
-      if (verdict) return { status: "reviewed", verdict }
+      const verdict = toVerdict(slot.no, result.output)
+      if (verdict) {
+        if (slot.lens) verdict.lens = slot.lens.name
+        return { status: "reviewed", verdict }
+      }
     }
-    return { status: "invalid-response", reviewer: no, attempts, lastRaw }
+    return { status: "invalid-response", reviewer: slot.no, attempts, lastRaw }
   }
 
   // 协议失败以哨兵值穿透 parallel（避免被 WorkflowParallelError 包装），在外层统一抛
-  const outcomes = await parallel(
-    Array.from({ length: reviewers }, (_, i) => () => runReviewer(i + 1)),
-  )
+  const outcomes = await parallel(slots.map((slot) => () => runReviewer(slot)))
 
   const protocolFailure = outcomes.find((o) => o.status === "invalid-response")
   if (protocolFailure) {
@@ -251,19 +292,22 @@ export async function verify(
   const verdicts = outcomes.map(
     (o) => (o as { status: "reviewed"; verdict: ReviewVerdict }).verdict,
   )
-  const passed = verdicts.every((v) => v.verdict === "pass")
+  const passCount = verdicts.filter((v) => v.verdict === "pass").length
+  // 投票阈值（P2-11）：占比 >= threshold 才通过（默认 1 = 全票，旧行为）
+  const passed = passCount / verdicts.length >= threshold
 
   console.log(
     `[agentic-workflow] verify ${passed ? "ok" : "FAIL"}: ${label} ` +
-      `(${verdicts.filter((v) => v.verdict === "pass").length}/${verdicts.length} pass)`,
+      `(${passCount}/${verdicts.length} pass${threshold < 1 ? `, threshold ${threshold}` : ""})`,
   )
 
   emitEvent({
     type: "verify.completed",
     label,
     passed,
-    passedCount: verdicts.filter((v) => v.verdict === "pass").length,
+    passedCount: passCount,
     totalCount: verdicts.length,
+    ...(threshold < 1 ? { threshold } : {}),
   })
 
   return { label, passed, verdicts }

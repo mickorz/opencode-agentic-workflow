@@ -40,6 +40,12 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
 （存在性断言）。模板变量：`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`；
 未知变量 = 该步骤失败（journal 可见，绝不静默空串）。
 
+**verify 步增强**（P2-11）：`reviewers: N`（N 个同质评审员，默认 1）；
+`threshold: 0.5`（投票阈值 (0,1]，pass 占比达标即通过，缺省 1 = 全票）；
+`lenses: [{ name, criteria }]`（多视角——一个视角一个评审员、各按专属标准
+评，覆盖 reviewers/criteria；与 threshold 组合成视角投票）。代码式对应
+`verify(artifact, { reviewers, criteria, passThreshold, lenses })`。
+
 **agent 步调用级选项**（P1-4，仅 agent 步可用）：
 `model`（`"providerID/modelId"`，覆盖插件级子会话模型）、`timeoutMs`
 （单次尝试超时；超时不硬杀底层会话，只是不再等待）、`retries`
