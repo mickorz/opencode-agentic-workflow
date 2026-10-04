@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "package": "../../dist/plugin",
+      "options": {
+        "model": { "providerID": "glm", "id": "glm-5.3-flash" },
+        "agent": "build",
+        "checkpoint": { "mode": "auto-approve" },
+        "journalDir": ".agw/journal",
+        "traceDir": ".agw/trace",
+        "workflows": ["flows"]
+      }
+    }
+  ]
+}

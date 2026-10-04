@@ -37,6 +37,7 @@ import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
 import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
+import { loadDeclarativeWorkflows } from "../workflows/loader.js"
 import { GitWorktreeProvider, InPlaceWorkspaceProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
@@ -87,6 +88,12 @@ export default Plugin.define({
         baseRef?: string
         cleanup?: CleanupPolicy
       }
+      /**
+       * P4 自定义 workflow（声明式 JSON）：路径数组，每项为 .json 文件或
+       * 目录（扫一层 *.json），相对项目目录。文件格式与步骤类型见
+       * dev-docs/planning/P4-custom-workflows.md；坏文件跳过并告警。
+       */
+      workflows?: string[]
     }
 
     // P2.6 成本估算兜底：宿主价目表（ctx.model.list，USD/M tokens）。
@@ -174,6 +181,44 @@ export default Plugin.define({
       .register(reliableWorkflow({ checkCommand: options.checkCommand }))
       .register(artifactWorkflow())
       .register(featureDevelopmentWorkflow({ checkCommand: options.checkCommand }))
+
+    // P4 自定义 workflow（声明式 JSON）：options.workflows 路径（.json 文件
+    // 或目录，相对项目目录）→ 装载注册。文件级错误 warn+跳过（观测/装载
+    // 不能成为主链路故障源）；必须在工具注册前完成（flow enum 来自
+    // registry.listLatest()）
+    if (options.workflows && options.workflows.length > 0) {
+      const builtinIds = ["smoke", "reliable", "artifact", "feature-development"]
+      const loaded = await loadDeclarativeWorkflows(
+        options.workflows,
+        ctx.location.directory,
+        builtinIds,
+      )
+      for (const error of loaded.errors) {
+        console.log(`[agentic-workflow] custom workflow file skipped: ${error}`)
+      }
+      let registered = 0
+      for (const definition of loaded.definitions) {
+        try {
+          registry.register(definition)
+          registered += 1
+          console.log(
+            `[agentic-workflow] custom workflow registered: ${definition.id}@${definition.version} ` +
+              `(${(definition.stepNames ?? []).join(" -> ")})`,
+          )
+        } catch (error) {
+          console.log(
+            `[agentic-workflow] custom workflow rejected ${definition.id}@${definition.version}: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      }
+      if (registered === 0 && loaded.errors.length > 0) {
+        console.log(
+          "[agentic-workflow] note: no custom workflows were registered; " +
+            "built-in workflows remain fully available",
+        )
+      }
+    }
 
     // P2.5 durable journal：配置 journalDir 后，run 经 startWorkflow/resumeWorkflow
     // 走持久化链路（journal 记录 workflow {id, version} + args + steps，可恢复）

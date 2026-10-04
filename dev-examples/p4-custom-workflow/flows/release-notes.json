@@ -1,0 +1,36 @@
+{
+  "id": "release-notes",
+  "version": "1.0.0",
+  "description": "为指定主题起草发布说明：写文件 → 语义评审 → 存在性断言 → 人工审批",
+  "args": {
+    "type": "object",
+    "properties": {
+      "topic": { "type": "string", "description": "发布说明主题" }
+    },
+    "required": ["topic"]
+  },
+  "steps": [
+    {
+      "name": "draft",
+      "agent": "请在当前工作目录创建文件 release-notes.md：针对主题「{{topic}}」的发布说明，含 3-5 条变更要点（Markdown 一级标题 + 列表）。用文件写入工具直接创建，禁止调用 workflow / workflow_metrics 工具。完成后在回复中给出文件全文。"
+    },
+    {
+      "name": "review",
+      "verify": {
+        "artifact": "{{steps.draft}}",
+        "criteria": "是结构清晰的 Markdown 发布说明：有标题与 3-5 条要点，围绕给定主题，无占位符或空章节",
+        "reviewers": 1,
+        "label": "release-notes-review"
+      }
+    },
+    {
+      "name": "file",
+      "fileExists": "release-notes.md"
+    },
+    {
+      "name": "gate",
+      "checkpoint": "「{{topic}}」的发布说明已生成、通过语义评审与文件检查，批准定稿？"
+    }
+  ],
+  "output": "release-notes 已定稿：{{steps.draft}}"
+}
