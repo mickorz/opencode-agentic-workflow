@@ -29,10 +29,11 @@ import { withConcurrencyLimit } from "../runtime/semaphore.js"
 import { createFileTraceSink } from "../observability/trace.js"
 import { MetricsCollector, formatMetrics } from "../metrics/collector.js"
 import { WorkflowRegistry } from "../registry/registry.js"
-import { startWorkflow, resumeWorkflow, runWorkflowInline } from "../registry/runner.js"
+import { startWorkflow, startWorkflowDetached, resumeWorkflow, runWorkflowInline } from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
 import { buildWorkflowArgs } from "./tool-args.js"
 import { defineWorkflow } from "./define-workflow.js"
+import { controlStatus, controlStop } from "./workflow-control.js"
 import { FileExecutionStore } from "../state/file-store.js"
 import type { ExecutionStore } from "../state/store.js"
 import { reliableWorkflow } from "../workflows/reliable.js"
@@ -324,6 +325,16 @@ export default Plugin.define({
                 "Pass auto-approve for headless/opencode-run executions unless the user " +
                 "explicitly wants auto-reject. Ignored for flows without a checkpoint step",
             },
+            background: {
+              type: "boolean",
+              description:
+                "Start the run in the background and return the runId immediately " +
+                "(requires journalDir; ignored when resuming). Poll it with " +
+                "workflow_control action=status until completed/failed and read the " +
+                "output there. NOTE: only one workflow may run at a time - a " +
+                "background run occupies the slot until it finishes (stop it via " +
+                "workflow_control if the slot is needed)",
+            },
           },
         } as Record<string, unknown>,
         // V2 强校验：Tool.Result 使用 output 字段必须声明 output schema，
@@ -339,6 +350,7 @@ export default Plugin.define({
               flow?: unknown
               resumeRunId?: unknown
               checkpointMode?: unknown
+              background?: unknown
             }) ?? {}
           if (workflowDepth > 0) {
             return {
@@ -353,6 +365,62 @@ export default Plugin.define({
           const gateRestore = applyCheckpointModeOverride(
             parseCheckpointModeOverride(parsed.checkpointMode),
           )
+
+          const workflowId =
+            typeof parsed.flow === "string" && parsed.flow.length > 0
+              ? parsed.flow
+              : "smoke"
+          // P0-1：args 透传——topic 恒在顶层，其余 flow 声明参数经 args 对象
+          // 合并转发（引擎按 argsSchema 校验，required/类型不符即报具体问题）
+          const workflowArgs = buildWorkflowArgs(parsed.topic, parsed.args)
+
+          // P1-3 后台分支：depth/gate 生命周期移交给 completion（外层 try/finally
+          // 的立即恢复会提前放锁）。要求 journalDir；resume 一律走阻塞路径。
+          if (
+            parsed.background === true &&
+            store &&
+            !(typeof parsed.resumeRunId === "string" && parsed.resumeRunId.length > 0)
+          ) {
+            try {
+              const detached = await startWorkflowDetached(
+                registry, store, workflowId, workflowArgs, { workspace: workspaceBinding },
+              )
+              detached.completion
+                .then((result) =>
+                  console.log(
+                    `[agentic-workflow] background run ${result.runId} completed (${result.workflow.id})`,
+                  ),
+                )
+                .catch((error) =>
+                  console.log(
+                    `[agentic-workflow] background run ${detached.runId} ended: ` +
+                      `${error instanceof Error ? error.message : String(error)}`,
+                  ),
+                )
+                .finally(() => {
+                  workflowDepth -= 1
+                  gateRestore?.()
+                })
+              return {
+                output:
+                  `[background] ${detached.workflow.id}@${detached.workflow.version} ` +
+                  `runId=${detached.runId} started\n` +
+                  `poll: workflow_control action=status runId=${detached.runId} ` +
+                  "(status transitions to completed/failed/aborted; detail includes the output once completed)\n" +
+                  "stop: workflow_control action=stop runId=" +
+                  detached.runId +
+                  " (cooperative - takes effect at the next step boundary)",
+              }
+            } catch (error) {
+              workflowDepth -= 1
+              gateRestore?.()
+              const message = error instanceof Error ? error.message : String(error)
+              return {
+                output: `[agentic-workflow] background start failed: ${message}`,
+              }
+            }
+          }
+
           try {
             // resume 分支：journal -> registry 精确版本解析 -> 续跑
             if (typeof parsed.resumeRunId === "string" && parsed.resumeRunId.length > 0) {
@@ -371,15 +439,6 @@ export default Plugin.define({
                   `runId=${resumed.runId}]\n${resumed.output}`,
               }
             }
-
-            const workflowId =
-              typeof parsed.flow === "string" && parsed.flow.length > 0
-                ? parsed.flow
-                : "smoke"
-
-            // P0-1：args 透传——topic 恒在顶层，其余 flow 声明参数经 args 对象
-            // 合并转发（引擎按 argsSchema 校验，required/类型不符即报具体问题）
-            const workflowArgs = buildWorkflowArgs(parsed.topic, parsed.args)
 
             if (store) {
               const started = await startWorkflow(registry, store, workflowId, workflowArgs, {
@@ -409,6 +468,60 @@ export default Plugin.define({
           } finally {
             workflowDepth -= 1
             gateRestore?.()
+          }
+        },
+      })
+
+      // P1-3 run 控制工具：status（全量列表/单 run 详情）+ stop（协作式取消/
+      // 孤儿收口）。journal 是唯一事实源；未配置 journalDir 时明确报错。
+      editor.add({
+        name: "workflow_control",
+        description:
+          "Inspect and control workflow runs (requires the journalDir plugin option):\n" +
+          "- action=status: without runId lists all runs (newest first); with runId " +
+          "shows one run's detail - step statuses, args, failure reason, and the " +
+          "final output once completed. Use this to poll background runs.\n" +
+          "- action=stop: request a cooperative stop of a running run - it takes " +
+          "effect at the next step boundary (in-flight agent calls are not killed) " +
+          "and the journal ends as aborted (distinct from failed; aborted runs can " +
+          "be resumed). Also finalizes orphaned runs left 'running' by a restart.",
+        input: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["status", "stop"],
+              description: "status = inspect, stop = cooperative cancel",
+            },
+            runId: {
+              type: "string",
+              description: "Run id (from the workflow tool result or a status listing)",
+            },
+          },
+          required: ["action"],
+        } as Record<string, unknown>,
+        output: {
+          type: "string",
+        } as Record<string, unknown>,
+        async execute(input: unknown) {
+          const parsed = (input as { action?: unknown; runId?: unknown }) ?? {}
+          if (!store) {
+            return {
+              output:
+                "[agentic-workflow] workflow_control requires the journalDir plugin option to be configured",
+            }
+          }
+          const action = parsed.action === "stop" ? "stop" : "status"
+          const runId = typeof parsed.runId === "string" ? parsed.runId : undefined
+          if (action === "stop" && (!runId || runId.length === 0)) {
+            return { output: "[agentic-workflow] stop requires a runId" }
+          }
+          try {
+            const output = action === "stop" ? await controlStop(store, runId!) : await controlStatus(store, runId)
+            return { output }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return { output: `[agentic-workflow] workflow_control failed: ${message}` }
           }
         },
       })

@@ -116,6 +116,23 @@ export class RunJournal {
   }
 
   /**
+   * run 中止收口（P1-3 run 控制）：协作式 stop 到达步骤边界 / 孤儿 run 被
+   * workflow_control stop 收口。与 fail 同构，状态用 aborted——与失败可区分
+   * （用户主动停 ≠ 出错）。非 completed/failed 步骤一律标 skipped
+   * （含仍处 running 的被中断步骤：穿透式 abort 不经 stepFailed）。
+   */
+  async abort(reason?: unknown): Promise<void> {
+    this.assertOpen()
+    this.run.status = "aborted"
+    this.run.completedAt = Date.now()
+    this.run.failure = reason === undefined ? undefined : toErrorRecord(reason)
+    for (const step of this.run.steps) {
+      if (step.status !== "completed" && step.status !== "failed") step.status = "skipped"
+    }
+    await this.store.saveRun(this.run)
+  }
+
+  /**
    * 记录 workspace 身份（P2.7 隔离启用时，resume attach 的依据）。
    * 仅限 run 进行中（收口后不可再写）。
    */

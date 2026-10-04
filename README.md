@@ -316,9 +316,20 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 
 | 参数 | 说明 |
 |------|------|
-| `flow` | workflow id（枚举由注册表驱动；缺省 `smoke`） |
-| `topic` | 主题参数 |
-| `resumeRunId` | 恢复指定 run（优先于 flow/topic；用失败输出里的 runId） |
+| `flow` | workflow id（见工具描述内清单，含 `workflow_define` 定义的自定义流程；缺省 `smoke`；未知 id 报错并列出可用清单） |
+| `topic` | 主题参数（恒传顶层） |
+| `args` | flow 声明的其余参数（对象；描述内 `[args: …]` 有提示；required/类型不符即报具体问题） |
+| `resumeRunId` | 恢复指定 run（优先于 flow/topic；用失败输出里的 runId；aborted 的 run 也可恢复） |
+| `checkpointMode` | 调用级审批覆盖：`"auto-approve" | "auto-reject"`（headless 必传前者，除非明确要拒） |
+| `background` | `true` = 后台启动并立即返回 runId（需 journalDir；用 `workflow_control` 轮询/停止；同一进程同时只跑一个 workflow） |
+
+**`workflow_define`** —— 对话中定义自定义流程（声明式 JSON：校验 → 立即注册 → 落盘，
+之后每次启动自动装载；幂等重定义 / 改内容必须升 version）。
+
+**`workflow_control`** —— run 检查与控制（需 journalDir）：
+`action=status`（全量列表或单 run 详情，含最终 output）；
+`action=stop`（协作式停止——下一步骤边界生效，journal 收口为 `aborted`；
+进程重启遗留的悬置 running run 会被直接收口）。
 
 **`workflow_metrics`** —— 只读查询本服务累计指标（`format: "text" | "json"`）。
 

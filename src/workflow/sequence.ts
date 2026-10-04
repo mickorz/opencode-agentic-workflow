@@ -21,6 +21,7 @@ import { WorkflowSequenceError, WorkflowStepError } from "../runtime/errors.js"
 import { emitEvent } from "../observability/events.js"
 import { RunJournal } from "../state/recorder.js"
 import type { ExecutionStore } from "../state/store.js"
+import { RunAbortedError } from "../registry/run-control.js"
 
 export interface SequenceOptions {
   /** 失败模式，默认 "fail-fast" */
@@ -70,6 +71,11 @@ async function runLoop<T>(
       await journal?.stepCompleted(i, result)
       emitEvent({ type: "step.completed", index: i, durationMs: Date.now() - stepStartedAt })
     } catch (cause) {
+      // P1-3 协作式停止：RunAbortedError 直接穿透——不收集、不标 step failed、
+      // 不把 run 收口为 failed（由 runner 统一收口为 aborted：主动停 ≠ 出错）
+      if (cause instanceof RunAbortedError) {
+        throw cause
+      }
       const stepError = new WorkflowStepError(i, cause, options?.stepNames?.[i])
       await journal?.stepFailed(i, cause)
       emitEvent({

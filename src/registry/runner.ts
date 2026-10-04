@@ -35,6 +35,7 @@ import type { WorkflowContext } from "./definition.js"
 import type { WorkflowRegistry } from "./registry.js"
 import { WorkflowArgsError, WorkflowExecutionError } from "./errors.js"
 import { validateArgs } from "./schema.js"
+import { RunAbortedError, clearLive, markLive, throwIfCancelled } from "./run-control.js"
 
 export interface WorkflowRunResult {
   runId: string
@@ -70,10 +71,23 @@ function createContext(input: {
     // P2.7：隔离工作区根目录（未启用隔离时为 undefined）
     workspaceRoot: input.workspaceRoot,
     runSteps(steps, options) {
+      // P1-3 协作式取消：每个步骤执行前检查 stop 标记（正在执行的
+      // LLM 调用不打断，下一个边界生效并收口 aborted）
+      const guarded = (steps as Array<(prev?: unknown) => Promise<unknown>>).map(
+        (step) => async (prev?: unknown) => {
+          throwIfCancelled(input.runId)
+          return step(prev)
+        },
+      )
       if (input.mode === "resume" && input.store) {
-        return resumeSequence(input.store, input.runId, steps, options as SequenceOptions)
+        return resumeSequence(
+          input.store,
+          input.runId,
+          guarded as never,
+          options as SequenceOptions,
+        )
       }
-      return sequence(steps, {
+      return sequence(guarded as never, {
         ...(options as SequenceOptions),
         journal: input.journal,
       })
@@ -162,20 +176,30 @@ async function cleanupWorkspace(
   }
 }
 
-/** 启动新 run（默认最新版本；可用 options.version 精确指定） */
-export async function startWorkflow(
+/** begin 阶段产物：runId 已定、journal 已落盘，执行尚未开始 */
+interface BegunRun {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  definition: any
+  identity: WorkflowIdentity
+  journal: RunJournal
+  runId: string
+  store: ExecutionStore
+  cleanupPolicy: CleanupPolicy
+}
+
+/** begin：resolve -> args 校验 -> journal 落盘（到此即有 runId；验证错误同步抛出） */
+async function beginRun(
   registry: WorkflowRegistry,
   store: ExecutionStore,
   id: string,
   args: unknown,
   options?: { version?: string; workspace?: WorkspaceBinding },
-): Promise<WorkflowRunResult> {
+): Promise<BegunRun> {
   const definition = registry.resolve(id, options?.version)
   const problems = validateArgs(definition.argsSchema, args)
   if (problems.length > 0) {
     throw new WorkflowArgsError(definition.id, problems)
   }
-
   const identity: WorkflowIdentity = { id: definition.id, version: definition.version }
   const journal = await RunJournal.start(store, {
     workflow: identity,
@@ -183,17 +207,29 @@ export async function startWorkflow(
     stepNames: definition.stepNames,
     stepCount: definition.stepNames?.length ?? 0,
   })
-  const runId = journal.run.runId
-  const cleanupPolicy = options?.workspace?.cleanup ?? "on-success"
+  return {
+    definition,
+    identity,
+    journal,
+    runId: journal.run.runId,
+    store,
+    cleanupPolicy: options?.workspace?.cleanup ?? "on-success",
+  }
+}
 
+/** execute：workspace 创建 -> definition.run -> 收口 -> 清理（含取消/失败分支） */
+async function runToCompletion(
+  begun: BegunRun,
+  args: unknown,
+  options?: { workspace?: WorkspaceBinding },
+): Promise<WorkflowRunResult> {
+  const { definition, identity, journal, runId, store, cleanupPolicy } = begun
+  markLive(runId)
   let workspace: WorkspaceHandle | undefined
   try {
     // P2.7：创建隔离工作区并把身份落 journal（resume attach 依据）
     if (options?.workspace) {
-      workspace = await options.workspace.provider.create(
-        runId,
-        options.workspace.options,
-      )
+      workspace = await options.workspace.provider.create(runId, options.workspace.options)
       await journal.setWorkspace(workspace.identity)
     }
     setCurrentWorkspace(workspace)
@@ -214,11 +250,58 @@ export async function startWorkflow(
       setCurrentWorkspace(undefined)
     }
   } catch (error) {
+    // P1-3：用户协作式停止 -> aborted（与失败可区分：主动停 ≠ 出错）；
+    // 其余失败 -> failed。两者都清理失败现场并统一抛 WorkflowExecutionError
     if (journal.run.status === "running") {
-      await journal.fail(error)
+      if (error instanceof RunAbortedError) {
+        await journal.abort(error)
+      } else {
+        await journal.fail(error)
+      }
     }
     await cleanupWorkspace(store, runId, workspace, cleanupPolicy, false)
     throw new WorkflowExecutionError({ runId, ...identity }, error)
+  } finally {
+    clearLive(runId)
+  }
+}
+
+/** 启动新 run（默认最新版本；可用 options.version 精确指定）。阻塞至完成 */
+export async function startWorkflow(
+  registry: WorkflowRegistry,
+  store: ExecutionStore,
+  id: string,
+  args: unknown,
+  options?: { version?: string; workspace?: WorkspaceBinding },
+): Promise<WorkflowRunResult> {
+  const begun = await beginRun(registry, store, id, args, options)
+  return runToCompletion(begun, args, options)
+}
+
+export interface DetachedWorkflowRun {
+  runId: string
+  workflow: WorkflowIdentity
+  /** 完成时 resolve；失败/中止 reject（journal 已收口，错误仅留痕） */
+  completion: Promise<WorkflowRunResult>
+}
+
+/**
+ * P1-3 后台启动：begin（同步可抛验证错误）后立即返回 runId，
+ * 执行在后台继续。结果不自动回传会话——用 workflow_control status 轮询
+ * （journal 是唯一事实源）。
+ */
+export async function startWorkflowDetached(
+  registry: WorkflowRegistry,
+  store: ExecutionStore,
+  id: string,
+  args: unknown,
+  options?: { version?: string; workspace?: WorkspaceBinding },
+): Promise<DetachedWorkflowRun> {
+  const begun = await beginRun(registry, store, id, args, options)
+  return {
+    runId: begun.runId,
+    workflow: begun.identity,
+    completion: runToCompletion(begun, args, options),
   }
 }
 
@@ -245,6 +328,7 @@ export async function resumeWorkflow(
   const cleanupPolicy = options?.workspace?.cleanup ?? "on-success"
 
   let workspace: WorkspaceHandle | undefined
+  markLive(runId)
   try {
     if (options?.workspace && run.workspace) {
       workspace = await options.workspace.provider.attach(run.workspace)
@@ -264,8 +348,18 @@ export async function resumeWorkflow(
       setCurrentWorkspace(undefined)
     }
   } catch (error) {
-    await settleAfterFailure(store, runId, error)
+    // P1-3：resume 途中被 stop -> aborted（其余失败维持 failed 语义）
+    if (error instanceof RunAbortedError) {
+      const journal = await RunJournal.attach(store, runId)
+      if (journal && journal.run.status === "running") {
+        await journal.abort(error)
+      }
+    } else {
+      await settleAfterFailure(store, runId, error)
+    }
     await cleanupWorkspace(store, runId, workspace, cleanupPolicy, false)
     throw new WorkflowExecutionError({ runId, ...identity }, error)
+  } finally {
+    clearLive(runId)
   }
 }

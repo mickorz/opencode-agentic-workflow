@@ -44,10 +44,15 @@
 
 ### P1 —— v1 老用户迁移硬缺口（本迭代争取）
 
-3. **后台运行与 run 控制**（M）——v1：缺省后台返回 runId、完成后结果自动回传会话、
-   `workflow_control status/stop` 全局控制。v2：前台阻塞、无停止手段（外部测试
-   Watching 已有「杀进程后 run 悬置」信号，互相印证）。stop 语义需与 journal
-   的 cancelled 状态（Watching 既有条目）一并设计。
+3. ~~**后台运行与 run 控制**（M）~~ ✅ **已完成（2026-10-05，随 0.5.0 发布）**——
+   `workflow` 工具新增 `background=true`（begin/run 拆分，runId 先行返回，
+   depth/gate 生命周期移交 completion；结果经 `workflow_control status` 轮询，
+   journal 为唯一事实源）；新工具 `workflow_control`：status（全量列表/单 run
+   详情含 output）+ stop（活体=协作式取消于步骤边界、journal 收口
+   **aborted**（主动停≠出错，reopen 兼容可 resume）；孤儿 run 直接收口——
+   外部测试「杀进程后 run 悬置」信号的解）。已知限制：单进程同时仅一个
+   workflow（gate/workspace 全局单例，L 范围架构项与 P2-9 同根）。
+   测试 +8（全量 227/227）；E2E：后台启动→轮询→journal completed×3→产物落盘。
 4. **agent 调用级选项**（M）——v1：per-call `model` / `tier`（model-tiers.json 分层，
    小模型干活大模型把关）/ `timeoutMs` / `retries`。v2：model/agent 是插件级全局。
    分步：先 per-call model + timeoutMs/retries（executor 已有注入点），tier 体系缓发。
