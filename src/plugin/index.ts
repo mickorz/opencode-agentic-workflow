@@ -31,6 +31,7 @@ import { MetricsCollector, formatMetrics } from "../metrics/collector.js"
 import { WorkflowRegistry } from "../registry/registry.js"
 import { startWorkflow, resumeWorkflow, runWorkflowInline } from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
+import { buildWorkflowArgs } from "./tool-args.js"
 import { FileExecutionStore } from "../state/file-store.js"
 import type { ExecutionStore } from "../state/store.js"
 import { reliableWorkflow } from "../workflows/reliable.js"
@@ -283,6 +284,14 @@ export default Plugin.define({
               type: "string",
               description: "The topic to analyze (not needed when resuming)",
             },
+            args: {
+              type: "object",
+              description:
+                "Flow-specific parameters declared by the flow, beyond topic - " +
+                "see each flow's [args: ...] hint in the description above. " +
+                "Pass every declared parameter as a key/value pair; missing required " +
+                "or wrongly-typed parameters fail the run with the exact problem listed",
+            },
             flow: {
               type: "string",
               enum: registry.listLatest().map((definition) => definition.id),
@@ -313,6 +322,7 @@ export default Plugin.define({
           const parsed =
             (input as {
               topic?: unknown
+              args?: unknown
               flow?: unknown
               resumeRunId?: unknown
               checkpointMode?: unknown
@@ -354,10 +364,14 @@ export default Plugin.define({
                 ? parsed.flow
                 : "smoke"
 
+            // P0-1：args 透传——topic 恒在顶层，其余 flow 声明参数经 args 对象
+            // 合并转发（引擎按 argsSchema 校验，required/类型不符即报具体问题）
+            const workflowArgs = buildWorkflowArgs(parsed.topic, parsed.args)
+
             if (store) {
-              const started = await startWorkflow(registry, store, workflowId, {
-                topic: parsed.topic,
-              }, { workspace: workspaceBinding })
+              const started = await startWorkflow(registry, store, workflowId, workflowArgs, {
+                workspace: workspaceBinding,
+              })
               return {
                 output:
                   `[${started.workflow.id}@${started.workflow.version} ` +
@@ -366,9 +380,7 @@ export default Plugin.define({
             }
 
             // 未配置 journalDir：直跑（不持久化、不可恢复）
-            const inline = await runWorkflowInline(registry, workflowId, {
-              topic: parsed.topic,
-            })
+            const inline = await runWorkflowInline(registry, workflowId, workflowArgs)
             return { output: inline.output }
           } catch (error) {
             // 抛错会诱发主 agent 无限重试工具调用（实测 22 轮重试耗尽配额）。

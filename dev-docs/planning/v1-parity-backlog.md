@@ -26,11 +26,13 @@
 
 ### P0 —— 阻塞性缺口（下一迭代立即排）
 
-1. **流程参数透传**（S）——工具层目前只转发 `topic`（`src/plugin/index.ts` 两处
-   `topic: parsed.topic`），P4 自定义流程声明的 `args`（除 topic 外）**经工具不可达**，
-   刚发布的能力缺了一半。改法：白名单转发 flow 声明的 argsSchema 字段
-   （宿主 enum/schema 校验已有）。**验收**：examples/02 改造练习 2（audience 参数）
-   实跑通过。
+1. ~~**流程参数透传**（S）~~ ✅ **已完成（2026-10-04 深夜，随 0.5.0 发布）**——
+   `src/plugin/tool-args.ts`（topic 恒顶层 + args 合并，非对象 fail-loud）、
+   工具 schema 新增 `args` 参数、`registry.summarize()` 摘要非 topic 参数
+   （`[args: name(type, required)]`，可发现性是透传的另一半）；测试 +7
+   （全量 211/211）；E2E 实跑验收（examples/02 改造练习 2 形态）：
+   audience 参数直达 prompt，journal args 完整落盘，产物按目标读者行文。
+   feature-development 的 checkCommand/reviewers/keepLockfileChanges 同时解锁。
 2. **自然语言 → 声明式 JSON 生成链路**（S~M）——v1 的「零代码」核心体验：主 agent
    经 skill 引导直接写出合规 flows/*.json 并落盘。v2 的 P4 只有手写路径。
    形态：workflow 工具描述内嵌格式规范 + （可选）内置 workflow-authoring skill。

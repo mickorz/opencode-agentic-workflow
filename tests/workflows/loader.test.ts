@@ -57,6 +57,38 @@ const valid = {
   output: "OUT: {{steps.draft}}",
 }
 
+test("run：自定义 args（audience）注入模板（P0-1 args 可达性）", async () => {
+  const echo = new EchoExecutor()
+  setExecutor(echo)
+  const workDir = await fs.mkdtemp(path.join(baseDir, "ws-args-"))
+
+  const flow = {
+    ...valid,
+    id: "digest",
+    args: {
+      type: "object",
+      properties: {
+        topic: { type: "string" },
+        audience: { type: "string", description: "目标读者" },
+      },
+      required: ["topic", "audience"],
+    },
+    steps: [
+      { name: "draft", agent: "为 {{topic}} 写速览，目标读者：{{args.audience}}" },
+      { name: "gate", checkpoint: "批准 {{topic}}？" },
+    ],
+    output: "OUT",
+  }
+  await writeWorkflow("args-flow.json", flow)
+  const { definitions } = await loadDeclarativeWorkflows([path.join(baseDir, "args-flow.json")], baseDir)
+
+  const { output } = await runDefinition(definitions[0]!, { topic: "状态机", audience: "中学生" }, workDir)
+  assert.equal(output, "OUT")
+  // agent prompt 同时注入了 topic 与自定义 args.audience
+  assert.match(echo.prompts[0]!, /为 状态机 写速览/)
+  assert.match(echo.prompts[0]!, /目标读者：中学生/)
+})
+
 test("装载：合法文件转换为 definition（stepNames/描述/缺省 argsSchema）", async () => {
   await writeWorkflow("ok.json", valid)
   const { definitions, errors } = await loadDeclarativeWorkflows(

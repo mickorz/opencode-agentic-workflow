@@ -193,3 +193,26 @@ test("注册边界: 缺 id/version 抛错", () => {
   )
   void WorkflowRegistrationError
 })
+
+test("summarize: 非 topic 参数摘要可见（P0-1 args 可发现性）", () => {
+  const registry = new WorkflowRegistry()
+  registry.register({
+    ...def("digest", "1.0.0"),
+    argsSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string" },
+        audience: { type: "string", description: "目标读者" },
+        depth: { type: "integer", description: "深度" },
+      },
+      required: ["topic", "audience"],
+    },
+  })
+  registry.register(def("plain", "1.0.0"))
+  const summary = registry.summarize()
+  // 有额外参数：列出名字+类型，required 标注；topic 不出现在提示里
+  assert.match(summary, /\[args: audience\(string, required\), depth\(integer\)\]/)
+  // 只有 topic / 无 argsSchema：无 [args: ...] 噪声
+  const lines = summary.split("\n")
+  assert.ok(!lines.some((l) => l.startsWith("- plain@") && l.includes("[args:")))
+})

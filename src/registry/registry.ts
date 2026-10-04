@@ -12,6 +12,7 @@
  * 第一版仅支持代码注册；动态发现 / marketplace / 热加载明确不做（P2 范围外）。
  */
 
+import type { ArgsSchema } from "./schema.js"
 import type { WorkflowDefinition } from "./definition.js"
 import { WorkflowNotFoundError, WorkflowRegistrationError } from "./errors.js"
 
@@ -123,9 +124,30 @@ export class WorkflowRegistry {
   }
 
   /** 摘要（工具描述用）：`id@version: description` 每行一条（按最新版本） */
+  /** args 摘要：只列 topic 之外的声明参数（topic 工具恒传，列出只是噪声） */
   summarize(): string {
     return this.listLatest()
-      .map((d) => `- ${d.id}@${d.version}${d.description ? `: ${d.description}` : ""}`)
+      .map((d) => {
+        const extra = summarizeArgsHint(d.argsSchema)
+        return (
+          `- ${d.id}@${d.version}` +
+          `${d.description ? `: ${d.description}` : ""}` +
+          `${extra ? ` [args: ${extra}]` : ""}`
+        )
+      })
       .join("\n")
   }
+}
+
+/** 从 argsSchema 提取非 topic 参数提示：`name(type[, required])` 逗号拼接 */
+export function summarizeArgsHint(schema: ArgsSchema | undefined): string {
+  if (!schema || schema.type !== "object" || !schema.properties) return ""
+  const required = new Set(schema.required ?? [])
+  return Object.entries(schema.properties)
+    .filter(([key]) => key !== "topic")
+    .map(([key, prop]) => {
+      const type = prop && typeof prop === "object" && "type" in prop ? String(prop.type) : "any"
+      return `${key}(${type}${required.has(key) ? ", required" : ""})`
+    })
+    .join(", ")
 }
