@@ -40,8 +40,17 @@ opencode run --model glm/glm-5.3-flash \
 1. 给 `draft` 后面加一步语义评审：
    `{ "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "要点围绕主题且无空章节" } }`
 2. 自定义参数：加 `"args": { "type": "object", "properties": { "topic": {...}, "audience": {...} }, "required": ["topic"] }`，
-   prompt 里用 `{{args.audience}}`
+   prompt 里用 `{{args.audience}}`（调用工具时传 `args={"audience":"…"}`——参数直达 prompt）
 3. 升级契约：增删/重排步骤后把 `version` 升到 1.1.0（resume 依赖精确版本）
+
+## 进阶：一个字都不用手写
+
+直接在对话里说「帮我定义一个 workflow：……」，主 agent 会调用
+`workflow_define` 工具把需求变成合规 JSON——**校验 → 立即注册 → 落盘**
+到 `flows/`，当场可运行，之后每次启动自动装载。试试：
+
+> 帮我定义一个 workflow：id 为 compare，先让 agent 针对 {{topic}} 写对比分析存成
+> compare.md（记得加禁止递归那句），再断言文件存在。然后跑一下 topic=React vs Vue。
 
 格式完整参考：[`docs/workflow-authoring.md`](../../docs/workflow-authoring.md) 的
 「零代码自定义 workflow」章。

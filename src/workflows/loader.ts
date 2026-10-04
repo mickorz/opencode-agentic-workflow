@@ -83,7 +83,7 @@ async function expandEntries(entries: string[], baseDir: string): Promise<{ file
 }
 
 /** 单文件校验：返回声明对象或错误文案（含文件名前缀） */
-function validateWorkflow(raw: unknown, file: string): { ok: true; value: DeclarativeWorkflow } | { ok: false; error: string } {
+export function validateWorkflow(raw: unknown, file: string): { ok: true; value: DeclarativeWorkflow } | { ok: false; error: string } {
   const at = (msg: string) => `${path.basename(file)}: ${msg}`
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { ok: false, error: at("workflow file must be a JSON object") }
@@ -201,7 +201,8 @@ export function resolveTemplate(template: string, args: Record<string, unknown>,
   })
 }
 
-function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
+/** P0-2：声明对象 -> 可注册 definition（workflow_define 内联定义复用同一转换） */
+export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
   const lastAgentName = [...dw.steps].reverse().find((s): s is AgentStepDecl => "agent" in s)?.name
   return {
     id: dw.id,

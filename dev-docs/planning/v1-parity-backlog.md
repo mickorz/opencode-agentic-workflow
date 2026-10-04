@@ -33,10 +33,14 @@
    （全量 211/211）；E2E 实跑验收（examples/02 改造练习 2 形态）：
    audience 参数直达 prompt，journal args 完整落盘，产物按目标读者行文。
    feature-development 的 checkCommand/reviewers/keepLockfileChanges 同时解锁。
-2. **自然语言 → 声明式 JSON 生成链路**（S~M）——v1 的「零代码」核心体验：主 agent
-   经 skill 引导直接写出合规 flows/*.json 并落盘。v2 的 P4 只有手写路径。
-   形态：workflow 工具描述内嵌格式规范 + （可选）内置 workflow-authoring skill。
-   **验收**：对话中说需求 → 生成 JSON → 注册 → 调用全链无需人工编辑文件。
+2. ~~**自然语言 → 声明式 JSON 生成链路**（S~M）~~ ✅ **已完成（2026-10-05，随 0.5.0
+   发布）**——新工具 `workflow_define`：主 agent 对话中把需求整理成声明式 JSON，
+   校验（复用装载器同一套规则）→ 立即注册（当场可调用）→ 落盘到 `workflows`
+   配置目录（之后每次启动自动装载）。幂等重定义 / 同版不同内容拒绝（版本契约）/
+   升版共存取最新；`flow` 参数由 enum 改自由字符串（运行期定义的 id 可达，
+   未知 id 报错并列出可用清单）。测试 +8（全量 219/219）；E2E 一次通过：
+   对话给需求 → agent 生成合规 JSON（缺省 version 补齐）→ 落盘 → 立即调用，
+   journal `compare@1.0.0` completed ×2，产物落盘，全程零人工编辑文件。
 
 ### P1 —— v1 老用户迁移硬缺口（本迭代争取）
 

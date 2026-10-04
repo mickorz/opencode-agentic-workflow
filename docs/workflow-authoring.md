@@ -48,6 +48,16 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
 - 需要 parallel / 条件分支 / 重试编排？声明式 v1 只有直线 sequence，
   复杂控制流走代码式（`src/workflows/` 参考内置实现）
 
+### 让主 agent 替你写：`workflow_define` 工具（零文件编辑）
+
+不必手写 JSON：直接在对话里描述需求，主 agent 会把需求整理成声明式 JSON
+并调用 `workflow_define`——**校验 → 立即注册 → 落盘**到插件 `workflows`
+配置的目录，当场即可用 `workflow` 工具调用，之后每次启动自动装载。
+落盘目标目录不存在会自动创建。
+
+版本语义与手写路径一致：内容相同的重复 define 幂等成功；同 id@version
+不同内容被拒绝并提示升 `version`（旧版本 journal 的 resume 仍按精确版本解析）。
+
 
 ## 通用结构纪律
 
