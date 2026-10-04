@@ -52,11 +52,23 @@
 **原因**：interactive 门等待 TUI 弹窗应答；经 `opencode run` 等无 TUI 的方式
 调用时没人应答，300s 超时按 reject 安全失败。
 
+⚠️ **配置了 auto-approve 却仍出现？** 这是「守护进程单例投毒」：OpenCode 的
+长驻 server 进程可能附着旧插件实例，你项目 `opencode.json` 里的 checkpoint
+配置被完全无视（实例来自之前某个 interactive 配置的目录）。判别法：trace 的
+`checkpoint.waiting` 到 `completed(approved:false)` 恰好间隔 300s。
+
 **解法**：
 
+- **首选（≥0.4.0）**：调用 workflow 工具时显式传
+  `checkpointMode="auto-approve"`——参数随本次调用走，免疫任何旧配置：
+  ```text
+  调用 workflow 工具：flow=..., topic=..., checkpointMode=auto-approve
+  ```
 - 交互体验请用 TUI（`opencode` 交互模式启动，弹窗会出现）
 - headless / 脚本场景把配置改为
   `"checkpoint": { "mode": "auto-approve" }`
+- 环境里如有来历不明的长驻 `opencode` 进程（`pgrep -x opencode`），清掉
+  再跑：`pkill -x opencode`（下次使用时会自动重启，无副作用）
 
 ## 失败的 run 留下了 worktree 和分支
 

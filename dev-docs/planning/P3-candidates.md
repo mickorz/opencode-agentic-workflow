@@ -434,6 +434,137 @@ Decision:
 
 ---
 
+### Request: 守护进程复用导致插件单例投毒——checkpoint 配置被静默忽略（Blocker Override）
+
+Source:
+  外部测试者脚本实测 2026-10-04 下午（step2-flagship 用户 run
+  run_1791098284722_3777sy4q）
+
+Frequency:
+  1 次（但机制确定，见下）
+
+Evidence:
+  - 项目 opencode.json 明确 `checkpoint.mode=auto-approve`（磁盘可查），
+    但 trace 事件显示 `checkpoint.waiting → 300,006ms 后 approved:false`
+    ——精确等于交互门默认 5 分钟超时；journal 终态 failed（4/5）
+  - 该 run 的 checkpoint 事件**同时写进了另一个项目目录的 events.jsonl**
+    （Posmue/.agw/trace）——跨项目观测数据泄漏
+  - 机器上存在 3 个长驻 `opencode` server 进程；其中 PID 13044 的
+    cwd = `examples/01-coding-reliable`（**interactive 配置目录**），
+    启动于当日 01:13——交互门来源吻合
+  - 对照组：清理守护进程前同配置 run 行为不定；清场后待验证（结果回填）
+
+Problem:
+  插件在 init 时把 checkpoint gate（`setCheckpointGate`）与 trace sink
+  绑成 **module 级单例**（src/plugin/index.ts:131-145），隐含假设
+  「每次运行 = 新进程」。宿主 OpenCode 存在长驻 server 进程，`opencode run`
+  可能附着到旧 server：插件不重新加载，**新项目的 opencode.json 全部被无视**
+  （checkpoint 模式、traceDir 等都来自旧配置）。后果：
+  1. 配置静默失效（本例：auto-approve → 交互门 → 假失败 + 5 分钟挂起，
+     主 agent 徒劳 resume 循环烧配额直至失败）
+  2. 观测数据写进错误项目的目录（跨项目泄漏）
+
+Severity × Reproducibility:
+  Severity **高**（正确性：配置被忽略 + 假失败 + 数据泄漏）×
+  Reproducibility **确定**（守护进程存活即触发）→ 达 Blocker Override 门槛
+
+Existing capability:
+  interactive / policy 双门实现本身正确（Posmue 5/5 与 atvRVy 失败行为
+  各自与其「实际绑定」的门一致）——问题只在绑定时机与生命周期。
+
+Current workaround:
+  清理长驻 `opencode` server 进程后重跑（`kill <pid>` 或 `pkill -x opencode`）。
+  验证结果回填处：**已由更强证据取代**——修复后的受控 E2E（E2E B）在
+  interactive 坏配置下以 `checkpointMode=auto-approve` 显式参数运行，
+  审批同毫秒批准（27s 全链；交互门至少 300s），证明显式参数对投毒
+  配置免疫；清进程缓解的独立验证 run 因输出管道缓冲未回收，不再追。
+
+修复落位（v0.4.0）：
+  `src/plugin/checkpoint-override.ts` —— workflow 工具新增保留参数
+  `checkpointMode`（enum: auto-approve | auto-reject，宿主强校验），
+  调用时绑定策略门、finally 恢复原门。**范围收敛**：interactive 不做
+  调用级覆盖（需 RPC 域 + bind()，会累积注册且无 unbind 通道）。
+  已知限制（代码注释 + 本条目记录）：全局 gate 单例下并发不同覆盖值
+  有竞态，per-run 线程化为后续 L 范围；单会话串行场景不受影响。
+  测试 +5（parse 白名单/无覆盖不动/绑定与恢复含未绑定态/行为级
+  批准语义），E2E A/B 双证（B：坏配置 + 显式参数 → 同毫秒批准）。
+  候选 2（目录漂移检测）与候选 3（上游反馈）未做，保留在案。
+
+Complexity:
+  M。候选修复方向（按优先序）：
+  1. **workflow 工具参数级 checkpoint 显式覆盖**（`checkpointMode` per
+     invocation）——运行时显式 > 环境隐式，与「工具提示必须显式」的既有
+     教训一致；对守护进程宿主天然免疫
+  2. init 时记录 `ctx.location.directory`，工具调用时检测目录漂移并
+     警告/拒绝（防呆而非静默错）
+  3. 上游反馈：插件实例应按项目隔离或配置变更时重载
+
+Success criteria:
+  同机存在任意历史配置的守护进程时，带显式 checkpoint 参数的 run 行为
+  完全由该参数决定；无守护进程残留的新环境首跑即正确。
+
+Decision:
+  Accepted(v0.4.x)（Blocker Override：正确性阻塞，修复限 S~M——方向 1 为主）
+
+---
+
+### Request: 无隔离流程的 workspaceRoot 兜底指向错误目录（process.cwd() ≠ 项目目录）
+
+Source:
+  守护进程调查的受控复现 2026-10-04（agw-reproA / agw-reproB，artifact flow）
+
+Frequency:
+  2 次（两次受控复现同型失败，确定性）
+
+Evidence:
+  - 两轮全新目录 + 最小配置（无 isolation）跑 artifact：journal 均为
+    `[completed, failed, skipped]`
+  - agent **确实把文件写在了项目目录**（artifact.md 在 reproB 根目录可查），
+    但 write 步骤 journal 记录 `absolutePath: /Users/michaelchang/artifact.md`
+    ——`ctx.workspaceRoot ?? process.cwd()` 解析到了 **HOME** 而非项目目录
+  - check 步骤的 fileExists 断言因此查错地方 → 假失败
+
+Problem:
+  workspaceBinding 仅在 `options.isolation` 配置时创建（src/plugin/index.ts:187-203）；
+  无隔离时 `ctx.workspaceRoot` 为 undefined，流程落到 `process.cwd()`——
+  在真实托管运行里插件进程的 cwd **不是** opencode 项目目录。
+  单测里 cwd 恰好正确所以从未暴露。artifact / reliable 等以
+  「workspace 根」为前提的流程在无隔离真实运行中全数假失败。
+
+Severity × Reproducibility:
+  Severity 中（非旗舰路径但属静默假失败类正确性问题）×
+  Reproducibility 确定 → 达 Blocker Override 门槛（correctness）
+
+Existing capability:
+  有隔离路径（旗舰）不受影响——GitWorktreeProvider 用
+  `ctx.location.directory` 起 startDir，证明插件**拿得到**项目目录，
+  只是没喂给无隔离路径。
+
+Current workaround:
+  跑 artifact/reliable 时配置 `isolation: { mode: "git-worktree" }`。
+
+Complexity:
+  S。无隔离时以 `ctx.location.directory` 构造默认 workspaceRoot 注入 ctx
+  （或等价的显式注入点），加一条真实执行路径的单测。
+
+Success criteria:
+  无隔离、全新目录跑 artifact：文件写到项目目录、check 在项目目录断言、
+  journal absolutePath 与实际一致、全链 completed。
+
+修复落位（v0.4.0）：
+  `src/workspace/in-place.ts`（InPlaceWorkspaceProvider：create=解析项目
+  目录、dispose 恒 no-op、attach 回原目录且缺失抛错）+ 插件在未配置
+  git-worktree 隔离时默认绑定之（cleanup: never）。测试 +5（provider
+  单测 4 + runner 集成 1：ctx.workspaceRoot=项目目录、journal 记录
+  in-place 身份、项目文件保留）。E2E A 双证：修复前同场景两连假失败
+  （absolutePath=HOME/artifact.md），修复后 completed×3、absolutePath
+  = 项目目录、文件真实落盘。
+
+Decision:
+  Accepted(v0.4.x)（Blocker Override：正确性，S 范围）
+
+---
+
 ## Backlog（尚无真实用户来源，不得排期）
 
 以下均为**内部设计时已知的能力缺口**，仅作记录——在拿到真实用户反馈前，

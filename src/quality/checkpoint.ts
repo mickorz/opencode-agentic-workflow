@@ -54,9 +54,14 @@ export interface CheckpointOptions {
 
 let gate: CheckpointGate | undefined
 
-/** 注入 CheckpointGate（plugin 初始化时调用） */
-export function setCheckpointGate(value: CheckpointGate): void {
+/** 注入 CheckpointGate（plugin 初始化时调用；传 undefined 表示解除绑定） */
+export function setCheckpointGate(value: CheckpointGate | undefined): void {
   gate = value
+}
+
+/** 读取当前 gate（调用级覆盖需先保存原值以便恢复） */
+export function getCheckpointGate(): CheckpointGate | undefined {
+  return gate
 }
 
 /** 获取当前 gate；未注入时抛错 */

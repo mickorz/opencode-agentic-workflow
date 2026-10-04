@@ -37,11 +37,15 @@ import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
 import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
-import { GitWorktreeProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
+import { GitWorktreeProvider, InPlaceWorkspaceProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
   type InteractiveCheckpointOptions,
 } from "./interactive-checkpoint-gate.js"
+import {
+  applyCheckpointModeOverride,
+  parseCheckpointModeOverride,
+} from "./checkpoint-override.js"
 import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executor.js"
 import { buildPriceTable, estimateCostUSD } from "./price-table.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
@@ -183,7 +187,11 @@ export default Plugin.define({
     }
 
     // P2.7 workspace 隔离：GitWorktreeProvider（startDir = 项目目录，
-    // 内部解析到 git 仓库根；worktree 落在仓库同级目录，不污染仓库）
+    // 内部解析到 git 仓库根；worktree 落在仓库同级目录，不污染仓库）。
+    // P3 Blocker 修复：无隔离时绑定 InPlaceWorkspaceProvider——
+    // workspaceRoot 必须解析到项目目录；process.cwd() 在托管进程里
+    // 不是项目目录（长驻 server 场景实测为 HOME），artifact/reliable
+    // 等流程会「文件写对位置、check 查错位置」假失败。
     let workspaceBinding: { provider: WorkspaceProvider; options?: { baseRef?: string }; cleanup?: CleanupPolicy } | undefined
     if (options.isolation?.mode === "git-worktree") {
       const dir = options.isolation.dir
@@ -199,6 +207,14 @@ export default Plugin.define({
       console.log(
         `[agentic-workflow] workspace isolation: git-worktree ` +
           `(cleanup=${options.isolation.cleanup ?? "on-success"}${dir ? `, dir=${dir}` : ""})`,
+      )
+    } else {
+      workspaceBinding = {
+        provider: new InPlaceWorkspaceProvider({ startDir: ctx.location.directory }),
+        cleanup: "never",
+      }
+      console.log(
+        `[agentic-workflow] workspace: in-place (project dir, no isolation)`,
       )
     }
 
@@ -233,6 +249,14 @@ export default Plugin.define({
                 "Resume a previous durable run (from journal); overrides flow/topic. " +
                 "Use the runId reported by a failed workflow call",
             },
+            checkpointMode: {
+              type: "string",
+              enum: ["auto-approve", "auto-reject"],
+              description:
+                "Checkpoint gate mode for THIS invocation, overriding plugin config. " +
+                "Pass auto-approve for headless/opencode-run executions unless the user " +
+                "explicitly wants auto-reject. Ignored for flows without a checkpoint step",
+            },
           },
         } as Record<string, unknown>,
         // V2 强校验：Tool.Result 使用 output 字段必须声明 output schema，
@@ -242,7 +266,12 @@ export default Plugin.define({
         } as Record<string, unknown>,
         async execute(input: unknown) {
           const parsed =
-            (input as { topic?: unknown; flow?: unknown; resumeRunId?: unknown }) ?? {}
+            (input as {
+              topic?: unknown
+              flow?: unknown
+              resumeRunId?: unknown
+              checkpointMode?: unknown
+            }) ?? {}
           if (workflowDepth > 0) {
             return {
               output:
@@ -251,6 +280,11 @@ export default Plugin.define({
             }
           }
           workflowDepth += 1
+          // P3 Blocker 修复：调用级 checkpoint 覆盖（守护进程宿主下
+          // init 配置可能来自别的项目——显式参数免疫单例投毒）
+          const gateRestore = applyCheckpointModeOverride(
+            parseCheckpointModeOverride(parsed.checkpointMode),
+          )
           try {
             // resume 分支：journal -> registry 精确版本解析 -> 续跑
             if (typeof parsed.resumeRunId === "string" && parsed.resumeRunId.length > 0) {
@@ -304,6 +338,7 @@ export default Plugin.define({
             }
           } finally {
             workflowDepth -= 1
+            gateRestore?.()
           }
         },
       })

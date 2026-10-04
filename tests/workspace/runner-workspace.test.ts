@@ -19,6 +19,7 @@ import { setExecutor } from "../../src/runtime/engine.js"
 import type { AgentExecutor, AgentTask } from "../../src/runtime/executor.js"
 import { agent } from "../../src/workflow/agent.js"
 import { currentWorkspace } from "../../src/workspace/ambient.js"
+import { InPlaceWorkspaceProvider } from "../../src/workspace/in-place.js"
 import type {
   WorkspaceHandle,
   WorkspaceIdentity,
@@ -401,4 +402,33 @@ test("agent()：workspace 启用时 cwd 下发给 executor；未启用时不带 
   assert.equal(recording.tasks.length, 1)
   assert.equal(recording.tasks[0]?.cwd, undefined)
   assert.equal(noWs.workspaceRoot, undefined)
+})
+
+test("in-place 绑定（无隔离默认）：ctx.workspaceRoot=项目目录、journal 记录 in-place 身份、成功后项目文件保留", async () => {
+  const projectDir = await fs.mkdtemp(path.join(baseDir, "proj-"))
+  const sentinel = path.join(projectDir, "keep.txt")
+  await fs.writeFile(sentinel, "user data")
+
+  const executed: number[] = []
+  const seen: CaseContext = {}
+  const registry = new WorkflowRegistry().register(
+    makeDef("inplace", [async () => ({ topic: "T" })], executed, seen),
+  )
+
+  const result = await startWorkflow(registry, store, "inplace", { topic: "T" }, {
+    workspace: { provider: new InPlaceWorkspaceProvider({ startDir: projectDir }), cleanup: "never" },
+  })
+
+  assert.match(result.output, /^done:/)
+  assert.deepEqual(executed, [0])
+  // P3 修复核心断言：无隔离时 workspaceRoot 解析到项目目录（而非 process.cwd()）
+  assert.equal(seen.workspaceRoot, path.resolve(projectDir))
+
+  const run = await store.getRun(result.runId)
+  assert.ok(run?.workspace)
+  assert.equal(run.workspace.provider, "in-place")
+  assert.equal(run.workspace.path, path.resolve(projectDir))
+
+  // 原地工作区 = 用户项目目录：run 成功后文件原样保留
+  assert.equal(await fs.readFile(sentinel, "utf8"), "user data")
 })

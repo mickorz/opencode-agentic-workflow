@@ -10,4 +10,8 @@ export type {
   CleanupPolicy,
 } from "./provider.js"
 export { GitWorktreeProvider, type GitWorktreeProviderOptions } from "./git-worktree.js"
+export {
+  InPlaceWorkspaceProvider,
+  type InPlaceWorkspaceProviderOptions,
+} from "./in-place.js"
 export { currentWorkspace, setCurrentWorkspace } from "./ambient.js"
