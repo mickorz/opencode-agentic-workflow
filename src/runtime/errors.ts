@@ -112,3 +112,41 @@ export class WorkflowFallbackError extends WorkflowError {
     this.label = label
   }
 }
+
+/** P1-5 pipeline 失败（fail-fast 首个 / continue 聚合） */
+export class WorkflowPipelineError extends WorkflowError {
+  /** 失败条目（item 下标 + 原始异常；continue 模式含全部） */
+  readonly failures: Array<{ index: number; error: unknown }>
+  /** 各 item 的最后值（失败槽位为 undefined） */
+  readonly results: ReadonlyArray<unknown>
+  readonly mode: string
+
+  constructor(
+    failures: Array<{ index: number; error: unknown }>,
+    results: ReadonlyArray<unknown>,
+    mode: string,
+  ) {
+    const summary = failures
+      .map((f) => `#${f.index}: ${f.error instanceof Error ? f.error.message : String(f.error)}`)
+      .join("; ")
+    super(`pipeline failed (${mode}, ${failures.length} item(s)): ${summary}`)
+    this.name = "WorkflowPipelineError"
+    this.failures = failures
+    this.results = results
+    this.mode = mode
+  }
+}
+
+/** P1-5 race 全部分支失败（首个成功即胜出；全败 = 聚合抛出，fail-loud 不塌缩） */
+export class WorkflowRaceError extends WorkflowError {
+  readonly failures: Array<{ index: number; error: unknown }>
+
+  constructor(failures: Array<{ index: number; error: unknown }>) {
+    const summary = failures
+      .map((f) => `#${f.index}: ${f.error instanceof Error ? f.error.message : String(f.error)}`)
+      .join("; ")
+    super(`race failed: all ${failures.length} branch(es) failed: ${summary}`)
+    this.name = "WorkflowRaceError"
+    this.failures = failures
+  }
+}

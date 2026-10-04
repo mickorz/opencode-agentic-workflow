@@ -53,7 +53,13 @@ init 时自动装载注册——journal / trace / metrics / resume / workspace
 - 增删/重排 steps = 改版本契约，**必须升 `version`**（resume 按精确版本解析）
 - 坏文件只会 warn+跳过，不阻断其他流程——修好文件重启 OpenCode 即重新装载
 - 需要 parallel / 条件分支 / 重试编排？声明式 v1 只有直线 sequence，
-  复杂控制流走代码式（`src/workflows/` 参考内置实现）
+  复杂控制流走代码式（`src/workflows/` 参考内置实现）——组合子清单：
+  `sequence`（顺序链）、`parallel`（并发三模式）、`retry`（防锤击重试）、
+  `fallback`（候选降级）、`pipeline`（多条目 × 多阶段流水线）、`race`
+  （首达取胜，全败聚合抛错）、`judgePanel`（N 评委打分选优，0-10 数值
+  解析失败=该评委失败、绝不静默丢分）。嵌套组合的 journal 断点续跑仍
+  限定 sequence（resumeSequence 的既有边界），声明式嵌套流程需先设计
+  resume 语义再排期。
 
 ### 让主 agent 替你写：`workflow_define` 工具（零文件编辑）
 

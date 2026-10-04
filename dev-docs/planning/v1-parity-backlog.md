@@ -61,9 +61,16 @@
    声明式 agent 步开放可选键 model/timeoutMs/retries（校验逐一指名；
    非 agent 步带选项键 = unknown key 拒绝）。tier 体系仍缓发。
    测试 +10（全量 237/237）；E2E：声明式带三项选项实跑 completed、产物落盘。
-5. **组合子补齐：pipeline / race / judgePanel**（M）——v1 DSL 三件缺失件
-   （流水线多阶段整形；首达取胜；评审团打分选优）。代码式可手工组合，
-   但声明式与内置流程应有原语。judgePanel 与 verify 的 lens 想法同源。
+5. ~~**组合子补齐：pipeline / race / judgePanel**（M）~~ ✅ **已完成（2026-10-05，
+   随 0.5.0 发布）**——代码式三原语落地（v2 语义适配）：`pipeline`（条目并发 ×
+   阶段链串联，onFailure fail-fast/continue 与 sequence 同构）；`race`
+   （首个成功即胜出、败者不再等待——无法硬杀 LLM 调用与 run 控制同一诚实
+   语义；全败聚合抛 WorkflowRaceError，不塌缩 null）；`judgePanel`
+   （N 评委 × 候选并发打分 0-10，文本解析（结构化输出待 P1-6），解析失败
+   =该评委失败计入统计不进均分，全部候选无有效评分明确抛错）。测试 +13
+   （全量 250/250）。**声明式嵌套流程（pipeline/race 进 JSON）为新增缺口**：
+   resumeSequence 仅支持 sequence 前缀恢复，嵌套形状需先设计断点语义
+   （记录在「后续缺口」）。
 6. **结构化输出**（M，有前置调研）——v1：agent 按 schema 返回对象。v2：纯文本。
    依赖 OpenCode v2 session API 的结构化输出能力，先做 API 验证再排实现。
 
