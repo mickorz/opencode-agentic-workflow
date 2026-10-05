@@ -50,8 +50,12 @@
    journal 为唯一事实源）；新工具 `workflow_control`：status（全量列表/单 run
    详情含 output）+ stop（活体=协作式取消于步骤边界、journal 收口
    **aborted**（主动停≠出错，reopen 兼容可 resume）；孤儿 run 直接收口——
-   外部测试「杀进程后 run 悬置」信号的解）。已知限制：单进程同时仅一个
-   workflow（gate/workspace 全局单例，L 范围架构项与 P2-9 同根）。
+   外部测试「杀进程后 run 悬置」信号的解）。~~已知限制：单进程同时仅一个
+   workflow（gate/workspace 全局单例，L 范围架构项与 P2-9 同根）~~
+   **限制已解除（2026-10-06，并发 run 时代）**：P2-9 的 run 级上下文消除
+   根因后，工具层递归防护从「任一 run 在飞即拒绝」改为按调用来源判别
+   （executor 子会话登记 + 祖先链，`run-sessions`），顶层并发上限
+   `maxConcurrentRuns`（默认 3）；调度器单飞 skip 语义独立保留。
    测试 +8（全量 227/227）；E2E：后台启动→轮询→journal completed×3→产物落盘。
 4. ~~**agent 调用级选项**（M）~~ ✅ **已完成（2026-10-05，随 0.5.0 发布）**——
    `agent(prompt, { model, timeoutMs, retries, retryDelayMs })`：model

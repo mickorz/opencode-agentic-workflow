@@ -59,6 +59,7 @@ import { buildPriceTable, estimateCostUSD } from "./price-table.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 import { bindProgressBoard } from "./progress-board.js"
 import { buildCheckpointGate, parseCheckpointModeOverride } from "./checkpoint-override.js"
+import { isInsideRunSession } from "./run-sessions.js"
 
 export default Plugin.define({
   id: "agentic-workflow",
@@ -70,6 +71,12 @@ export default Plugin.define({
       model?: ExecutorModelRef
       agent?: string
       concurrency?: number
+      /**
+       * 并发顶层 run 上限（默认 3）。超出返回可读失败（提示用
+       * workflow_control 查看或停止在飞 run）。递归防护不受此限——
+       * 来自 run 内部的调用一律拒绝（run-sessions 祖先链判别）。
+       */
+      maxConcurrentRuns?: number
       checkpoint?: { mode?: CheckpointPolicy | "interactive" } & InteractiveCheckpointOptions
       /** reliable workflow 的 check 步骤命令 */
       checkCommand?: string
@@ -303,10 +310,23 @@ export default Plugin.define({
       )
     }
 
-    // 递归防护：workflow 运行期间，子会话里的 agent 也可能看到并调用 workflow 工具，
-    // 形成递归 workflow；叠加并发信号量后会自饿死死锁（实测卡死）。
-    // P0 策略：运行中直接拒绝嵌套调用，让子 agent 用自身能力直接完成任务。
-    let workflowDepth = 0
+    // 递归防护（并发 run 时代重构）：原先「任一 run 在飞即拒绝一切调用」的
+    // 计数器同时挡掉了合法的顶层并发（P2-9 已消除 gate/workspace 单例根因）。
+    // 现在按调用来源判别：executor 登记的 run 会话（及其派生子会话，经
+    // 祖先链）内的调用 = 嵌套递归，拒绝（信号量自饿死）；顶层会话放行，
+    // 受 maxConcurrentRuns 上限约束。
+    const maxConcurrentRuns = Math.max(1, options.maxConcurrentRuns ?? 3)
+    let activeRuns = 0
+
+    /** 调用会话的父级（session.get 的 parentID；查询失败按无父处理） */
+    const parentOfSession = async (id: string): Promise<string | undefined> => {
+      try {
+        const info = await ctx.session.get({ sessionID: id })
+        return info?.parentID
+      } catch {
+        return undefined
+      }
+    }
 
     ctx.tool.transform((editor) => {
       editor.add({
@@ -358,9 +378,9 @@ export default Plugin.define({
                 "Start the run in the background and return the runId immediately " +
                 "(requires journalDir; ignored when resuming). Poll it with " +
                 "workflow_control action=status until completed/failed and read the " +
-                "output there. NOTE: only one workflow may run at a time - a " +
-                "background run occupies the slot until it finishes (stop it via " +
-                "workflow_control if the slot is needed)",
+                "output there. Multiple top-level runs may run concurrently " +
+                "(up to maxConcurrentRuns, default 3); calls from inside a running " +
+                "workflow are rejected",
             },
           },
         } as Record<string, unknown>,
@@ -369,7 +389,7 @@ export default Plugin.define({
         output: {
           type: "string",
         } as Record<string, unknown>,
-        async execute(input: unknown) {
+        async execute(input: unknown, context: { sessionID?: string }) {
           const parsed =
             (input as {
               topic?: unknown
@@ -379,16 +399,32 @@ export default Plugin.define({
               checkpointMode?: unknown
               background?: unknown
             }) ?? {}
-          if (workflowDepth > 0) {
+          // 递归防护：来自 run 内部（executor 登记会话自身或其祖先）→ 拒绝；
+          // 会话身份缺失（宿主异常）时保守退回旧单飞语义
+          const callerSessionID = context?.sessionID
+          const nested =
+            callerSessionID === undefined
+              ? activeRuns > 0
+              : await isInsideRunSession(callerSessionID, parentOfSession)
+          if (nested) {
             return {
               output:
                 "[agentic-workflow] nested workflow calls are not allowed: " +
-                "another workflow is running. Complete the task directly yourself. " +
+                "this call comes from inside a running workflow. Complete the task directly yourself. " +
                 "(Workflow authors who need composition should use a subflow step " +
                 "or ctx.subflow() inside the workflow definition instead.)",
             }
           }
-          workflowDepth += 1
+          // 并发上限：顶层 run 并行数（默认 3）；超出给可读失败与处置提示
+          if (activeRuns >= maxConcurrentRuns) {
+            return {
+              output:
+                `[agentic-workflow] concurrency limit reached: ${activeRuns} top-level ` +
+                `runs are already live (max ${maxConcurrentRuns}). Poll them with ` +
+                "workflow_control action=status, or stop one with action=stop, then retry",
+            }
+          }
+          activeRuns += 1
           // P3 Blocker 修复 + P2-9：调用级 checkpoint 覆盖——为本次 run 构建
           // 策略门经 RunLaunchOptions.gate 注入（run 级，无换装/恢复竞态；
           // 守护进程宿主下 init 配置可能来自别的项目，显式参数免疫）
@@ -430,7 +466,7 @@ export default Plugin.define({
                   ),
                 )
                 .finally(() => {
-                  workflowDepth -= 1
+                  activeRuns -= 1
                 })
               return {
                 output:
@@ -443,7 +479,7 @@ export default Plugin.define({
                   " (cooperative - takes effect at the next step boundary)",
               }
             } catch (error) {
-              workflowDepth -= 1
+              activeRuns -= 1
               const message = error instanceof Error ? error.message : String(error)
               return {
                 output: `[agentic-workflow] background start failed: ${message}`,
@@ -498,7 +534,7 @@ export default Plugin.define({
               output: `[agentic-workflow] workflow failed: ${message}${resumeHint}`,
             }
           } finally {
-            workflowDepth -= 1
+            activeRuns -= 1
           }
         },
       })

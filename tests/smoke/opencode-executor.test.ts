@@ -11,6 +11,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import { OpenCodeV2Executor } from "../../src/plugin/opencode-v2-executor.js"
+import { isRunSession } from "../../src/plugin/run-sessions.js"
 
 interface FakeMessage {
   type: string
@@ -147,4 +148,40 @@ test("executor: 宿主 cost 为 0/缺失时走价目估算兜底", async () => {
   const execPositive = new OpenCodeV2Executor({ session: fakePositive.session as never })
   const positive = await execPositive.execute({ prompt: "p" })
   assert.equal(positive.costUSD, 2)
+})
+
+test("executor: 会话登记覆盖任务执行期（并发 run 递归防护的数据源）", async () => {
+  // wait 挂起：execute 进行中（会话应被登记），释放后（应已注销）
+  let releaseWait: (() => void) | undefined
+  const waitGate = new Promise<void>((resolve) => {
+    releaseWait = resolve
+  })
+  const fake = makeFakeSession([
+    { type: "assistant", content: [{ type: "text", text: "ok" }] },
+  ])
+  const originalWait = fake.session.wait.bind(fake.session)
+  fake.session.wait = async (args: Record<string, unknown>) => {
+    await waitGate
+    return originalWait(args)
+  }
+  const executor = new OpenCodeV2Executor({ session: fake.session as never })
+
+  const pending = executor.execute({ prompt: "p" })
+  // 微任务两跳让 execute 走到 wait（create/prompt 已发生）
+  await Promise.resolve()
+  await Promise.resolve()
+  // 会话在飞：已登记（sess_1 —— fake 的第一个会话）
+  assert.equal(isRunSession("sess_1"), true)
+
+  releaseWait?.()
+  await pending
+  // 任务结束：注销（空闲会话不会再发起工具调用）
+  assert.equal(isRunSession("sess_1"), false)
+})
+
+test("executor: 失败路径同样注销（不留永久登记）", async () => {
+  const fake = makeFakeSession([{ type: "user", content: [{ type: "text", text: "无回复" }] }])
+  const executor = new OpenCodeV2Executor({ session: fake.session as never })
+  await assert.rejects(executor.execute({ prompt: "p" }), /without assistant message/)
+  assert.equal(isRunSession("sess_1"), false)
 })

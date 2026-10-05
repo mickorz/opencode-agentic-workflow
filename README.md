@@ -309,6 +309,7 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 | `isolation.cleanup` | `always` / `on-success` / `never` | `on-success` | 清理策略 |
 | `workflows` | `string[]` | — | 声明式流程路径（.json 文件或目录） |
 | `schedulesDir` | `string` | 关闭 | 定时任务目录（配置 + 游标 + 触发记录）；需同时配置 `journalDir`，启用 `workflow_schedule` 工具与调度器 |
+| `maxConcurrentRuns` | `number` | `3` | 并发顶层 run 上限（超出返回可读失败并提示用 `workflow_control` 查看或停止在飞 run） |
 
 相对路径一律以**项目目录**（不是 service 进程 cwd）为基准解析。
 
@@ -323,7 +324,7 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 | `args` | flow 声明的其余参数（对象；描述内 `[args: …]` 有提示；required/类型不符即报具体问题） |
 | `resumeRunId` | 恢复指定 run（优先于 flow/topic；用失败输出里的 runId；aborted 的 run 也可恢复） |
 | `checkpointMode` | 调用级审批覆盖：`"auto-approve" | "auto-reject"`（headless 必传前者，除非明确要拒） |
-| `background` | `true` = 后台启动并立即返回 runId（需 journalDir；用 `workflow_control` 轮询/停止；同一进程同时只跑一个 workflow） |
+| `background` | `true` = 后台启动并立即返回 runId（需 journalDir；用 `workflow_control` 轮询/停止）。**并发顶层 run 已支持**：最多 `maxConcurrentRuns`（默认 3）个 run 同时在飞；来自 run 内部（其 agent 会话或派生子会话）的调用仍被拒绝（递归防护，防信号量自饿死） |
 
 **`workflow_define`** —— 对话中定义自定义流程（声明式 JSON：校验 → 立即注册 → 落盘，
 之后每次启动自动装载；幂等重定义 / 改内容必须升 version）。
@@ -347,7 +348,8 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 
 语义边界（如实）：调度器随宿主进程存活（进程退出即停）；停机错过的 slot
 重启后**合并为最近一个**补跑；创建时刻为游标基线（更早的 slot 不补跑，
-要立即跑用 `runNow`）；触发时若有 run 在跑（单飞）该 slot 记录 `skipped`
+要立即跑用 `runNow`）；触发时若有任一 run 在跑（调度器单飞，与手动并发
+上限独立——保持节奏可预期、避免并行成本意外）该 slot 记录 `skipped`
 （跳过不是延迟）；scheduled run 无人值守——checkpoint 强制 auto-approve、
 不启用 worktree 隔离；触发时用 registry 当前最新版本。
 
@@ -465,6 +467,24 @@ defineWorkflow({
 同一机制也顺带解决了 0.4.0 的已知限制「全局 gate 单例竞态」：checkpoint
 gate 与 workspace 现在经 run 级上下文（AsyncLocalStorage）解析，
 scheduler 的无人值守门与 `checkpointMode` 调用级覆盖都不再换装全局单例。
+
+## 并发 run（顶层多飞）
+
+gate/workspace 的 run 级化让**并发顶层 run** 成为安全默认：同一进程可同时
+跑最多 `maxConcurrentRuns`（默认 3）个 workflow——各自独立 journal /
+workspace（worktree）/ checkpoint 门 / 进度快照，agent 步共享同一并发
+信号量（公平排队，不会互相饿死）。
+
+递归防护（防信号量自饿死）从「任一 run 在飞即拒绝一切」改为**按调用来源
+判别**：executor 为每个 agent 任务创建的子会话在执行期内登记（`run-sessions`），
+workflow 工具凭调用会话的自身/祖先链（`session.get` 的 `parentID`，封顶
+8 跳）识别「来自 run 内部的调用」并拒绝（提示改用 subflow 组合）；顶层
+用户会话不在任何 run 树内，正常放行。会话身份缺失的宿主环境保守退回旧
+单飞语义。
+
+调度器行为不变：scheduled slot 触发时若有任一 run 在跑（含手动并发 run），
+该 slot 记 `skipped`——保持调度节奏可预期、避免并行成本意外，这是与手动
+并发上限相互独立的设计取舍。
 
 ## Journal 数据模型
 

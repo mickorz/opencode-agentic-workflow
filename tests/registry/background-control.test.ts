@@ -247,3 +247,47 @@ test("aborted run 可 resume：跳过 completed 前缀续跑并收口 completed"
   assert.match(resumed.output, /ran:s2/)
   assert.equal((await store.getRun(runId))?.status, "completed")
 })
+
+test("并发顶层 run：两个 detached run 真重叠运行，journal 互不串扰（并发时代）", async () => {
+  const registry = new WorkflowRegistry()
+    .register(twoStepFlow("conc-a"))
+    .register(twoStepFlow("conc-b"))
+  const store = newStore()
+  const gates = manualGates()
+
+  const a = await startWorkflowDetached(registry, store, "conc-a", { topic: "A" })
+  const b = await startWorkflowDetached(registry, store, "conc-b", { topic: "B" })
+  assert.notEqual(a.runId, b.runId)
+
+  // 真重叠证明：两个 run 的第一步同时 running（任一 gate 未放行）
+  await waitForStep(store, a.runId, 0, "running")
+  await waitForStep(store, b.runId, 0, "running")
+  assert.equal(isLive(a.runId), true)
+  assert.equal(isLive(b.runId), true)
+
+  // 分阶段放行（s2 的 gate 在 s1 完成后才注册——一次性 release 会 no-op 挂死）：
+  gates.release(0)
+  gates.release(1)
+  await waitForStep(store, a.runId, 1, "running")
+  await waitForStep(store, b.runId, 1, "running")
+  gates.release(2)
+  gates.release(3)
+  const [resultA, resultB] = await Promise.all([a.completion, b.completion])
+
+  // 双双收口，输出与 journal 各自正确
+  assert.equal(resultA.output, "ran:s1+s2")
+  assert.equal(resultB.output, "ran:s1+s2")
+  const runA = await store.getRun(a.runId)
+  const runB = await store.getRun(b.runId)
+  assert.equal(runA?.status, "completed")
+  assert.equal(runB?.status, "completed")
+  assert.deepEqual(
+    runA?.steps.map((s) => s.status),
+    ["completed", "completed"],
+  )
+  // args 落各自 payload（互不串扰）
+  assert.deepEqual(runA?.args, { topic: "A" })
+  assert.deepEqual(runB?.args, { topic: "B" })
+  assert.equal(isLive(a.runId), false)
+  assert.equal(isLive(b.runId), false)
+})

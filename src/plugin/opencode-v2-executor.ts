@@ -16,6 +16,7 @@
 import type { Plugin } from "@opencode/plugin"
 
 import type { AgentExecutor, AgentResult, AgentTask, TokenUsage } from "../runtime/executor.js"
+import { trackRunSession, untrackRunSession } from "./run-sessions.js"
 
 /** plugin context 的 session 域类型（避免在多处直接依赖 @opencode/plugin） */
 export type SessionDomain = Plugin.Context["session"]
@@ -80,63 +81,69 @@ export class OpenCodeV2Executor implements AgentExecutor {
     })
 
     const sessionID = created.id
+    // 并发 run 递归防护：任务执行期内登记本会话（workflow 工具据此拒绝
+    // 来自 run 内部的嵌套调用）；结束注销——空闲会话不会再发起工具调用
+    trackRunSession(sessionID)
+    try {
+      await this.session.prompt({
+        sessionID,
+        text: task.prompt,
+      })
 
-    await this.session.prompt({
-      sessionID,
-      text: task.prompt,
-    })
+      // V2 的 prompt 是 inbox 投递：等待会话处理完成后再读结果
+      await this.session.wait({ sessionID })
 
-    // V2 的 prompt 是 inbox 投递：等待会话处理完成后再读结果
-    await this.session.wait({ sessionID })
+      const messages = await this.session.context({ sessionID })
 
-    const messages = await this.session.context({ sessionID })
-
-    // 从后往前找最后一条 assistant 消息
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i]
-      if (message && message.type === "assistant") {
-        const output = message.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n")
-          .trim()
-        if (output.length > 0) {
-          // token 用量 / 成本 / 模型（V2 assistant 消息自带；P2.6 metrics 消费）
-          const usage = message.tokens && {
-            input: message.tokens.input,
-            output: message.tokens.output,
-            reasoning: message.tokens.reasoning,
-            cache: {
-              read: message.tokens.cache.read,
-              write: message.tokens.cache.write,
-            },
+      // 从后往前找最后一条 assistant 消息
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (message && message.type === "assistant") {
+          const output = message.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+            .trim()
+          if (output.length > 0) {
+            // token 用量 / 成本 / 模型（V2 assistant 消息自带；P2.6 metrics 消费）
+            const usage = message.tokens && {
+              input: message.tokens.input,
+              output: message.tokens.output,
+              reasoning: message.tokens.reasoning,
+              cache: {
+                read: message.tokens.cache.read,
+                write: message.tokens.cache.write,
+              },
+            }
+            const model = message.model && `${message.model.providerID}/${message.model.id}`
+            return {
+              output,
+              usage,
+              // 成本优先级：宿主正值（精确）> 价目表估算（宿主 0/缺失时兜底——
+              // 实测部分 provider 宿主记账为 0 但 models.dev 有实价）> 宿主原值
+              costUSD:
+                message.cost && message.cost > 0
+                  ? message.cost
+                  : (usage && model ? this.estimateCost?.(model, usage) : undefined) ??
+                    message.cost,
+              model,
+            }
           }
-          const model = message.model && `${message.model.providerID}/${message.model.id}`
-          return {
-            output,
-            usage,
-            // 成本优先级：宿主正值（精确）> 价目表估算（宿主 0/缺失时兜底——
-            // 实测部分 provider 宿主记账为 0 但 models.dev 有实价）> 宿主原值
-            costUSD:
-              message.cost && message.cost > 0
-                ? message.cost
-                : (usage && model ? this.estimateCost?.(model, usage) : undefined) ??
-                  message.cost,
-            model,
-          }
+          // assistant 存在但无文本：带出底层错误信息（如 provider 限流），便于排查
+          const detail = message.error
+            ? `${message.error.type ?? "error"}: ${message.error.message ?? "unknown"}`
+            : "assistant message has no text parts"
+          throw new Error(
+            `[agentic-workflow] session ${sessionID} failed: ${detail}`,
+          )
         }
-        // assistant 存在但无文本：带出底层错误信息（如 provider 限流），便于排查
-        const detail = message.error
-          ? `${message.error.type ?? "error"}: ${message.error.message ?? "unknown"}`
-          : "assistant message has no text parts"
-        throw new Error(
-          `[agentic-workflow] session ${sessionID} failed: ${detail}`,
-        )
       }
-    }
 
-    throw new Error(
-      `[agentic-workflow] session ${sessionID} finished without assistant message`,
-    )
+      throw new Error(
+        `[agentic-workflow] session ${sessionID} finished without assistant message`,
+      )
+    } finally {
+      untrackRunSession(sessionID)
+    }
   }
 }
