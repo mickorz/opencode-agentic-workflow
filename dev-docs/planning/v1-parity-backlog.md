@@ -72,9 +72,15 @@
    语义；全败聚合抛 WorkflowRaceError，不塌缩 null）；`judgePanel`
    （N 评委 × 候选并发打分 0-10，文本解析（结构化输出待 P1-6），解析失败
    =该评委失败计入统计不进均分，全部候选无有效评分明确抛错）。测试 +13
-   （全量 250/250）。**声明式嵌套流程（pipeline/race 进 JSON）为新增缺口**：
+   （全量 250/250）。~~**声明式嵌套流程（pipeline/race 进 JSON）为新增缺口**：
    resumeSequence 仅支持 sequence 前缀恢复，嵌套形状需先设计断点语义
-   （记录在「后续缺口」）。
+   （记录在「后续缺口」）。~~ ✅ **声明式 pipeline/race 已落地（2026-10-05）**：
+   各编译为**单个 sequence 步骤**，绕开 resume 断点设计——每个声明式并发步
+   = 一个 journal 步骤单元（completed 即整体跳过、中断重跑整步，与 sequence
+   前缀语义一致，文档如实标注）；条目级断点需求引导至 subflow 拆步或代码式。
+   `pipeline` 步（`{{item}}` 字面替换（函数形参 replace，$ 等特殊字符安全）→
+   通用模板；items/outputAs/onFailure/model/timeoutMs/retries）与 `race` 步
+   （≥2 提示、outputAs；全败抛 WorkflowRaceError）。测试 +8（全量 338/338）。
 6. ~~**结构化输出**（M，有前置调研）~~ ✅ **以 shim 形态完成（2026-10-05，随 0.5.0
    发布）**——前置调研结论：**OpenCode v2 会话 API 无原生结构化输出**
   （`@opencode/schema` 2.0.22 的 `PromptInput.Prompt` 仅

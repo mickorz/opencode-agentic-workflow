@@ -616,6 +616,13 @@ export default Plugin.define({
           "- subflow: \"flow-id\" to nest another registered workflow as a step " +
           "(optional args: object of primitives/templates; requires journalDir; " +
           "max nesting depth 3; the subflow output feeds {{steps.<name>}})\n" +
+          "- pipeline: per-item prompt template ({{item}} = entry; keep the " +
+          "recursion guard sentence) + items: non-empty array of templates; " +
+          "optional outputAs/onFailure(\"fail-fast\"|\"continue\")/model/timeoutMs/" +
+          "retries; results = array aligned with items (JSON string in " +
+          "{{steps.<name>}}); whole step is one resume unit\n" +
+          "- race: array of >=2 prompt templates, first success wins (optional " +
+          "outputAs); all-fail = step failure\n" +
           "Rules: unknown template variable = step failure; changing steps " +
           "requires bumping version; built-in ids (smoke/reliable/artifact/" +
           "feature-development) are reserved.",

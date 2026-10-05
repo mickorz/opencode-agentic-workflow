@@ -424,7 +424,8 @@ server 侧链路：事件发射、board 维护、RPC 契约（snapshot/detail）
 P2-9 起支持把另一个已注册 workflow 作为步骤运行（v1 的 `workflow()` 原语对位）。
 两条路：
 
-**声明式**——步骤键 `subflow`（五类互斥键之一）：
+**声明式**——步骤键 `subflow`（七类互斥键之一：agent / checkpoint / verify /
+fileExists / subflow / pipeline / race）：
 
 ```jsonc
 {
@@ -467,6 +468,36 @@ defineWorkflow({
 同一机制也顺带解决了 0.4.0 的已知限制「全局 gate 单例竞态」：checkpoint
 gate 与 workspace 现在经 run 级上下文（AsyncLocalStorage）解析，
 scheduler 的无人值守门与 `checkpointMode` 调用级覆盖都不再换装全局单例。
+
+## 声明式并发步骤（pipeline / race）
+
+代码组合子 `pipeline()` / `race()` 的 JSON 形态（v1 parallel/race 原语对位）——
+不想写 TS 定义也能声明并发结构：
+
+```jsonc
+{
+  "id": "multi-analysis",
+  "steps": [
+    // 条目并发 fan-out：items 每项是模板，解析后作为条目值；{{item}} 引用条目
+    { "name": "fanout", "pipeline": "分析 {{item}}（主题 {{topic}}）",
+      "items": ["{{topic}}-甲", "{{topic}}-乙", "{{topic}}-丙"],
+      "outputAs": "reports",                       // 结果数组并入 state 的键（缺省 = 步骤名）
+      "onFailure": "continue",                     // 可选：fail-fast（缺省）| continue
+      "model": "glm/glm-5.3-flash", "timeoutMs": 300000, "retries": 1 },
+    // 竞速首胜：≥2 提示并发起跑，首个成功者胜出，全败抛 WorkflowRaceError
+    { "name": "fastest", "race": ["方案A：{{topic}}", "方案B：{{topic}}"] }
+  ],
+  "output": "{{steps.fanout}}"   // pipeline 结果 = 与 items 对齐的数组（JSON 串）
+}
+```
+
+- **pipeline**：条目间并发（共享插件 `concurrency` 信号量）、单阶段；结果数组与
+  `items` 顺序对齐；`{{steps.<name>}}` 拿到 JSON 串。调用级选项
+  （model/timeoutMs/retries）每条目同规则透传。
+- **race**：败者不拖整体（与 run 控制同一诚实语义）；可选 `outputAs`。
+- **resume 粒度（如实）**：两者各占一个 journal 步骤单元——completed 即整体
+  跳过，中断后重跑整步（条目级断点不落盘，与 sequence 前缀语义一致）。
+  需要条目级恢复就拆 subflow 步或用代码式定义。
 
 ## 并发 run（顶层多飞）
 
@@ -520,7 +551,7 @@ workflow 工具凭调用会话的自身/祖先链（`session.get` 的 `parentID`
 | 平台 | OpenCode **V1** 插件 API | OpenCode **V2** 插件 API |
 | workflow 形态 | 主 agent **运行时生成 JS 编排脚本**（VM 沙箱） | **声明式定义** + 语义版本注册（代码内） |
 | 调用方式 | 自然语言 → 生成脚本 → 执行 | `flow=<id>` + args（或 `resumeRunId`） |
-| 原语 | agent / parallel / sequence / fallback / race | agent / parallel / sequence / phase + check / verify / checkpoint + **subflow** |
+| 原语 | agent / parallel / sequence / fallback / race | agent / parallel / sequence / phase + check / verify / checkpoint + **subflow** + **pipeline/race（声明式或代码式）** |
 | 崩溃恢复 | 无 | journal + resume（completed 跳过、精确版本、幂等重放） |
 | 隔离 | 子会话 | git worktree per run（resume reattach） |
 | 观测 | TUI 进度树 | events.jsonl trace + metrics/成本聚合 |

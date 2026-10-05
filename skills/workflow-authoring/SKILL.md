@@ -50,22 +50,27 @@ description: >
 }
 ```
 
-**步骤五类**（每步恰好一个步骤键）：`agent`（子 agent）、`checkpoint`（人工
+**步骤七类**（每步恰好一个步骤键）：`agent`（子 agent）、`checkpoint`（人工
 审批门）、`verify`（语义评审；可加 `threshold` 投票与 `lenses` 多视角）、
 `fileExists`（文件存在断言，相对项目根）、`subflow`（嵌套另一个已注册
 workflow；`"subflow": "flow-id"` + 可选 `args` 对象（原始值或模板）；需要
 journalDir；嵌套深度上限 3；子 run 的输出进 `{{steps.<名>}}`，子 run 失败按
-普通步骤失败处理）。
+普通步骤失败处理）、`pipeline`（条目并发 fan-out：`"pipeline": "提示模板"`
+（`{{item}}` 引用条目）+ `items` 非空模板数组 + 可选 `outputAs`/`onFailure`/
+`model`/`timeoutMs`/`retries`；结果数组与 items 对齐，`{{steps.<名>}}` 得
+JSON 串）、`race`（多提示竞速：`"race": ["模板A", "模板B"]` ≥2 并发起跑
+首个成功者胜出 + 可选 `outputAs`；全败报错）。pipeline/race 各占一个
+resume 单元：中断重跑整步（条目级断点不支持，需要就拆 subflow 步）。
 
 **必守纪律（违反 = 事故）**：
 
 1. 每个 `agent` prompt **必须以「禁止调用 workflow / workflow_metrics 工具」
    收尾**——子 agent 递归调工作流会自饿死并发信号量
-2. 模板变量只有 `{{topic}}`、`{{args.x}}`、`{{steps.<前步名>}}`；未知变量 =
-   该步失败（fail-loud，绝不静默空串）
+2. 模板变量只有 `{{topic}}`、`{{args.x}}`、`{{steps.<前步名>}}`（pipeline
+   提示内另有 `{{item}}`）；未知变量 = 该步失败（fail-loud，绝不静默空串）
 3. `args` 里声明过的参数才能在 prompt 里引用；`topic` 恒有（工具自动传）
 4. `agent` 步可选 `model`（"providerID/modelId"）/ `timeoutMs`（正数毫秒）/
-   `retries`（非负整数）——只在 agent 步合法
+   `retries`（非负整数）——只在 agent 与 pipeline 步合法（race 仅 outputAs）
 5. 改动已注册流程的步骤内容 = **必须升 version**（1.0.0 → 1.1.0）；旧版本
    journal 的 resume 依赖精确版本解析
 6. `id` 不得用内置名：smoke / reliable / artifact / feature-development
@@ -95,7 +100,9 @@ journalDir；嵌套深度上限 3；子 run 的输出进 `{{steps.<名>}}`，子
 
 | 报错 | 原因与修法 |
 |------|-----------|
-| `must have exactly one of agent/checkpoint/verify/fileExists/subflow` | 一步给了两个步骤键，或忘了给 |
+| `must have exactly one of agent/checkpoint/verify/fileExists/subflow/pipeline/race` | 一步给了两个步骤键，或忘了给 |
+| `items must be a non-empty array of non-empty string templates` | pipeline 步缺 items 或混入非字符串/空串 |
+| `race must be an array of at least 2 non-empty prompt templates` | race 步分支少于 2 或有空提示（单分支无竞速意义） |
 | `subflow step "..." requires the journalDir` | subflow 需要插件配置 journalDir（lineage 落盘）；配置后重试 |
 | `subflow nesting too deep` | 嵌套超 3 层；拍平组合方式 |
 | `template variable {{...}} is not provided` | 调用没传该参数，或 args 没声明 |

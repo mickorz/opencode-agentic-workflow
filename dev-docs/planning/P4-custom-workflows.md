@@ -56,7 +56,7 @@ authoring guide「零代码自定义 workflow」章已就位（原「尚无装�
 }
 ```
 
-步骤类型（互斥键，v1 四种，全部映射既有原语）：
+步骤类型（互斥键，v1 四种 + 演进三种，全部映射既有原语）：
 
 | 键 | 原语 | 语义 |
 |---|---|---|
@@ -64,9 +64,16 @@ authoring guide「零代码自定义 workflow」章已就位（原「尚无装�
 | `checkpoint: string` | `checkpoint(msg, {label})` | 人工/策略审批门 |
 | `verify: { artifact, criteria?, reviewers?, label? }` | `assertVerify` | 语义评审，否决即失败 |
 | `fileExists: string` | `assert(fileExists(p))` | 相对 workspaceRoot 的存在性断言 |
+| `subflow: string`（P2-9） | `ctx.subflow(id, args)` | 嵌套已注册流程（lineage journal） |
+| `pipeline: string` + `items`（P5） | `pipeline(items, [stage])` | 条目并发 fan-out；`{{item}}` 引用条目；结果数组入 state |
+| `race: string[]`（P5） | `race(branches)` | ≥2 提示竞速取首胜；全败聚合报错 |
 
 模板变量：`{{topic}}`（= args.topic）、`{{args.x}}`、`{{steps.<name>}}`
-（agent 步输出）。未知变量 = 步骤级失败（journal 可见，绝不静默空串）。
+（agent 步输出；pipeline/race 步为结果数组 JSON 串/胜者原文）。
+pipeline 提示内另有 `{{item}}`（先字面替换再走通用模板）。
+未知变量 = 步骤级失败（journal 可见，绝不静默空串）。
+pipeline/race 各占一个 journal 步骤单元（resume 粒度 = 整步，
+与 sequence 前缀语义一致）。
 
 ## 错误语义
 

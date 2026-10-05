@@ -3,8 +3,12 @@
  *
  * 装载契约（详见 dev-docs/planning/P4-custom-workflows.md）：
  *   - 入口：.json 文件路径 或 目录（扫一层 *.json）；相对项目目录
- *   - 步骤五类（互斥键）：agent / checkpoint / verify / fileExists / subflow
- *   - 模板：{{topic}}、{{args.x}}、{{steps.<name>}}；未知变量 = 步骤失败
+ *   - 步骤七类（互斥键）：agent / checkpoint / verify / fileExists / subflow /
+ *     pipeline（条目并发 fan-out，{{item}} 引用条目）/ race（≥2 提示竞速取首胜）
+ *   - 模板：{{topic}}、{{args.x}}、{{steps.<name>}}；pipeline 提示额外支持
+ *     {{item}}（条目字面替换，先于通用模板解析）；未知变量 = 步骤失败
+ *   - 并发步骤的 resume 粒度：pipeline/race 各占一个 journal 步骤单元
+ *     （completed 即整体跳过；中断重跑整步——与 sequence 前缀语义一致）
  *   - 错误语义：装载期文件级 skip+warn（不阻断其他文件与内置流程）；
  *     运行期步骤级 failed（走既有 journal/resume 语义）
  *
@@ -19,6 +23,8 @@ import path from "node:path"
 import type { WorkflowDefinition } from "../registry/definition.js"
 import type { AnyWorkflowDefinition } from "../registry/registry.js"
 import { agent } from "../workflow/agent.js"
+import { pipeline } from "../workflow/pipeline.js"
+import { race } from "../workflow/race.js"
 import { assert } from "../quality/check.js"
 import { assertVerify } from "../quality/verify.js"
 import { checkpoint } from "../quality/checkpoint.js"
@@ -60,12 +66,44 @@ interface SubflowStepDecl {
   subflow: string
   args?: Record<string, string | number | boolean>
 }
+/**
+ * 并发流水线步骤（声明式 pipeline）：pipeline = 每条目提示模板（{{item}} 引用条目，
+ * 其余变量走通用模板）；items = 条目模板数组（每项解析后原样作为条目值）。
+ * 条目并发、单阶段（多阶段链用代码式 combinator）；结果数组（与 items 对齐）
+ * 并入 state[outputAs ?? name]。
+ */
+interface PipelineStepDecl {
+  name: string
+  pipeline: string
+  /** 条目（每项为模板） */
+  items: string[]
+  /** 结果并入 state 的键（缺省 = 步骤名） */
+  outputAs?: string
+  /** 失败模式（与代码式 pipeline 同语义，缺省 fail-fast） */
+  onFailure?: "fail-fast" | "continue"
+  /** agent 调用级选项（每条目同规则透传） */
+  model?: string
+  timeoutMs?: number
+  retries?: number
+}
+/**
+ * 竞速步骤（声明式 race）：race = 竞速提示模板数组（≥2），并发起跑、
+ * 首个成功者输出并入 state[outputAs ?? name]；全败抛 WorkflowRaceError。
+ */
+interface RaceStepDecl {
+  name: string
+  race: string[]
+  /** 结果并入 state 的键（缺省 = 步骤名） */
+  outputAs?: string
+}
 type StepDecl =
   | AgentStepDecl
   | CheckpointStepDecl
   | VerifyStepDecl
   | FileExistsStepDecl
   | SubflowStepDecl
+  | PipelineStepDecl
+  | RaceStepDecl
 
 export interface DeclarativeWorkflow {
   id: string
@@ -79,7 +117,35 @@ export interface DeclarativeWorkflow {
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/
-const STEP_KEYS = ["agent", "checkpoint", "verify", "fileExists", "subflow"] as const
+const STEP_KEYS = ["agent", "checkpoint", "verify", "fileExists", "subflow", "pipeline", "race"] as const
+
+/** 各步骤键开放的可选键（未知键拒绝；无则仅 name + 步骤键本身） */
+const OPTION_KEYS_BY_KIND: Record<string, string[]> = {
+  agent: ["model", "timeoutMs", "retries"],
+  subflow: ["args"],
+  pipeline: ["items", "outputAs", "onFailure", "model", "timeoutMs", "retries"],
+  race: ["outputAs"],
+}
+
+/** agent 调用级选项校验（agent 步与 pipeline 步共用同一规则） */
+function checkAgentOptions(step: Record<string, unknown>, index: number): string | undefined {
+  if (step.model !== undefined && (typeof step.model !== "string" || !step.model.includes("/"))) {
+    return `steps[${index}].model must be "providerID/modelId"`
+  }
+  if (
+    step.timeoutMs !== undefined &&
+    (typeof step.timeoutMs !== "number" || !Number.isFinite(step.timeoutMs) || step.timeoutMs <= 0)
+  ) {
+    return `steps[${index}].timeoutMs must be a positive number (ms)`
+  }
+  if (
+    step.retries !== undefined &&
+    (typeof step.retries !== "number" || !Number.isInteger(step.retries) || step.retries < 0)
+  ) {
+    return `steps[${index}].retries must be a non-negative integer`
+  }
+  return undefined
+}
 
 /** 解析入口路径列表为 .json 文件列表（目录 = 一层扫描；不存在的入口报错） */
 async function expandEntries(entries: string[], baseDir: string): Promise<{ files: string[]; errors: string[] }> {
@@ -155,27 +221,13 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
       }
     }
     const kind = present[0]!
-    // P1-4：调用级选项键仅对 agent 步开放；P2-9：args 仅对 subflow 步开放
-    const optionKeys =
-      kind === "agent" ? ["model", "timeoutMs", "retries"] : kind === "subflow" ? ["args"] : []
-    if (kind === "agent") {
-      if (
-        step.model !== undefined &&
-        (typeof step.model !== "string" || !step.model.includes("/"))
-      ) {
-        return { ok: false, error: at(`steps[${index}].model must be "providerID/modelId"`) }
-      }
-      if (
-        step.timeoutMs !== undefined &&
-        (typeof step.timeoutMs !== "number" || !Number.isFinite(step.timeoutMs) || step.timeoutMs <= 0)
-      ) {
-        return { ok: false, error: at(`steps[${index}].timeoutMs must be a positive number (ms)`) }
-      }
-      if (
-        step.retries !== undefined &&
-        (typeof step.retries !== "number" || !Number.isInteger(step.retries) || step.retries < 0)
-      ) {
-        return { ok: false, error: at(`steps[${index}].retries must be a non-negative integer`) }
+    // 各步骤键开放的可选键（P1-4 agent 调用级选项；P2-9 subflow args；
+    // pipeline items/outputAs/onFailure + 调用级选项；race outputAs）
+    const optionKeys = OPTION_KEYS_BY_KIND[kind] ?? []
+    if (kind === "agent" || kind === "pipeline") {
+      const optionError = checkAgentOptions(step, index)
+      if (optionError) {
+        return { ok: false, error: at(optionError) }
       }
     }
     if (kind === "verify") {
@@ -228,6 +280,36 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
           }
         }
       }
+    } else if (kind === "pipeline") {
+      // 声明式 pipeline：payload 非空提示模板 + items 非空模板数组 + 可选键类型
+      if (typeof step.pipeline !== "string" || step.pipeline.length === 0) {
+        return { ok: false, error: at(`steps[${index}].pipeline must be a non-empty string (prompt template, {{item}} references the entry)`) }
+      }
+      if (
+        !Array.isArray(step.items) ||
+        step.items.length === 0 ||
+        !step.items.every((it) => typeof it === "string" && it.length > 0)
+      ) {
+        return { ok: false, error: at(`steps[${index}].items must be a non-empty array of non-empty string templates`) }
+      }
+      if (step.outputAs !== undefined && (typeof step.outputAs !== "string" || !ID_PATTERN.test(step.outputAs))) {
+        return { ok: false, error: at(`steps[${index}].outputAs must match ${ID_PATTERN}`) }
+      }
+      if (step.onFailure !== undefined && step.onFailure !== "fail-fast" && step.onFailure !== "continue") {
+        return { ok: false, error: at(`steps[${index}].onFailure must be "fail-fast" | "continue"`) }
+      }
+    } else if (kind === "race") {
+      // 声明式 race：≥2 个非空提示模板（单分支无竞速意义，fail-loud）+ outputAs
+      if (
+        !Array.isArray(step.race) ||
+        step.race.length < 2 ||
+        !step.race.every((p) => typeof p === "string" && p.length > 0)
+      ) {
+        return { ok: false, error: at(`steps[${index}].race must be an array of at least 2 non-empty prompt templates`) }
+      }
+      if (step.outputAs !== undefined && (typeof step.outputAs !== "string" || !ID_PATTERN.test(step.outputAs))) {
+        return { ok: false, error: at(`steps[${index}].outputAs must match ${ID_PATTERN}`) }
+      }
     } else if (typeof step[kind] !== "string") {
       return { ok: false, error: at(`steps[${index}].${kind} must be a string (template)`) }
     }
@@ -238,7 +320,14 @@ export function validateWorkflow(raw: unknown, file: string): { ok: true; value:
         !optionKeys.includes(k),
     )
     if (unknownStepKeys.length > 0) {
-      return { ok: false, error: at(`steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] (allowed: name + 恰好一个步骤键${kind === "agent" ? " + agent 可选 model/timeoutMs/retries" : ""}${kind === "subflow" ? " + subflow 可选 args" : ""})`) }
+      return {
+        ok: false,
+        error: at(
+          `steps[${index}] has unknown key(s) [${unknownStepKeys.join(", ")}] ` +
+            `(allowed: name + exactly one step key (${STEP_KEYS.join("/")})` +
+            `${optionKeys.length > 0 ? ` + optional ${optionKeys.join("/")}` : ""})`,
+        ),
+      }
     }
   }
   if (dw.output !== undefined && typeof dw.output !== "string") {
@@ -291,7 +380,11 @@ export function resolveTemplate(template: string, args: Record<string, unknown>,
 
 /** P0-2：声明对象 -> 可注册 definition（workflow_define 内联定义复用同一转换） */
 export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
-  const lastAgentName = [...dw.steps].reverse().find((s): s is AgentStepDecl => "agent" in s)?.name
+  // 默认输出来源：最后一个「产出型」步骤（agent 原文 / race 胜者原文；
+  // pipeline 为结果数组的 JSON 串——需要可读输出就显式写 output 模板）
+  const lastProducerName = [...dw.steps]
+    .reverse()
+    .find((s): s is AgentStepDecl | PipelineStepDecl | RaceStepDecl => "agent" in s || "pipeline" in s || "race" in s)?.name
   return {
     id: dw.id,
     version: dw.version ?? "1.0.0",
@@ -362,6 +455,48 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
             return { ...prev, [step.name]: result.output }
           }
         }
+        if ("pipeline" in step) {
+          return async (prev: Record<string, unknown> | undefined) => {
+            // 条目 = 模板数组逐项解析（{{topic}}/{{args.x}}/{{steps.x}}）
+            const items = step.items.map((tpl) => resolve(tpl))
+            // 每条目一次 agent 调用；{{item}} 先字面替换（replace 用函数形参，
+            // 条目含 $ 等特殊字符不受 replacement pattern 影响）再走通用模板
+            const results = await pipeline(
+              items,
+              [
+                async (item: string) => {
+                  const prompt = resolveTemplate(
+                    step.pipeline.replace(/\{\{\s*item\s*\}\}/g, () => item),
+                    flowArgs,
+                    stepOutputs,
+                  )
+                  const result = await agent(prompt, {
+                    ...(step.model !== undefined ? { model: step.model } : {}),
+                    ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
+                    ...(step.retries !== undefined ? { retries: step.retries } : {}),
+                  })
+                  return result.output
+                },
+              ],
+              { ...(step.onFailure !== undefined ? { onFailure: step.onFailure } : {}) },
+            )
+            stepOutputs.set(step.name, JSON.stringify(results))
+            return { ...prev, [step.outputAs ?? step.name]: results }
+          }
+        }
+        if ("race" in step) {
+          return async (prev: Record<string, unknown> | undefined) => {
+            // 并发起跑，首个成功者的输出胜出（全败抛 WorkflowRaceError）
+            const winner = await race(
+              step.race.map((tpl) => async () => {
+                const result = await agent(resolve(tpl))
+                return result.output
+              }),
+            )
+            stepOutputs.set(step.name, winner)
+            return { ...prev, [step.outputAs ?? step.name]: winner }
+          }
+        }
         return async (prev: Record<string, unknown> | undefined) => {
           const target = path.resolve(root, resolve(step.fileExists))
           await assert(() => fileExistsPredicate(target), `${step.name}: ${target} exists in workspace (${root})`)
@@ -371,7 +506,10 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
 
       await ctx.runSteps(built, { stepNames: dw.steps.map((s) => s.name) })
 
-      const output = dw.output !== undefined ? resolve(dw.output) : stepOutputs.get(lastAgentName ?? "") ?? `workflow ${dw.id} completed`
+      const output =
+        dw.output !== undefined
+          ? resolve(dw.output)
+          : stepOutputs.get(lastProducerName ?? "") ?? `workflow ${dw.id} completed`
       return { output }
     },
   } satisfies WorkflowDefinition<Record<string, unknown>, { output: string }> as AnyWorkflowDefinition

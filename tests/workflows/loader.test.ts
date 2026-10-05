@@ -15,6 +15,8 @@ import { test } from "node:test"
 import {
   loadDeclarativeWorkflows,
   resolveTemplate,
+  toDefinition,
+  validateWorkflow,
 } from "../../src/workflows/loader.js"
 import { setExecutor } from "../../src/runtime/engine.js"
 import { sequence } from "../../src/workflow/sequence.js"
@@ -338,4 +340,228 @@ test("P2-9 执行：ctx.subflow 缺失（未配 journalDir）→ 清晰报错", 
     },
   }
   await assert.rejects(() => def.run({}, ctx), /subflow step "child" requires the journalDir/)
+})
+
+// ---------------------------------------------------------------------------
+// 声明式 pipeline / race（并发步骤进 JSON）
+
+test("校验: pipeline 步合法形状通过；items/payload/onFailure/outputAs 各自把关", () => {
+  const ok = validateWorkflow(
+    {
+      id: "pipe-flow",
+      steps: [
+        {
+          name: "fanout",
+          pipeline: "分析 {{item}}（主题 {{topic}}）",
+          items: ["{{topic}}-甲", "{{topic}}-乙"],
+          outputAs: "reports",
+          onFailure: "continue",
+          model: "glm/glm-5.3-flash",
+          timeoutMs: 60000,
+          retries: 1,
+        },
+      ],
+    },
+    "pipe.json",
+  )
+  assert.equal(ok.ok, true)
+})
+
+test("校验: pipeline 步各失效形状逐一拒绝", () => {
+  const cases: Array<{ step: Record<string, unknown>; match: RegExp }> = [
+    { step: { name: "f", pipeline: "p {{item}}" }, match: /items must be a non-empty array/ },
+    { step: { name: "f", pipeline: "p {{item}}", items: [] }, match: /items must be a non-empty array/ },
+    { step: { name: "f", pipeline: "p {{item}}", items: ["a", 3] }, match: /items must be a non-empty array/ },
+    { step: { name: "f", pipeline: "", items: ["a"] }, match: /pipeline must be a non-empty string/ },
+    { step: { name: "f", pipeline: "p", items: ["a"], outputAs: "Bad Key" }, match: /outputAs must match/ },
+    { step: { name: "f", pipeline: "p", items: ["a"], onFailure: "ignore" }, match: /onFailure must be/ },
+    { step: { name: "f", pipeline: "p", items: ["a"], concurrency: 5 }, match: /unknown key\(s\) \[concurrency\]/ },
+    { step: { name: "f", pipeline: "p", items: ["a"], model: "not-a-ref" }, match: /model must be/ },
+  ]
+  for (const { step, match } of cases) {
+    const res = validateWorkflow({ id: "pipe-bad", steps: [step] }, "bad.json")
+    assert.equal(res.ok, false, JSON.stringify(step))
+    assert.match(res.error, match, JSON.stringify(step))
+  }
+})
+
+test("校验: race 步（≥2 提示）通过；单分支/非字符串/越权选项键拒绝", () => {
+  const ok = validateWorkflow(
+    {
+      id: "race-flow",
+      steps: [
+        { name: "fastest", race: ["方案A：{{topic}}", "方案B：{{topic}}"], outputAs: "winner" },
+      ],
+    },
+    "race.json",
+  )
+  assert.equal(ok.ok, true)
+
+  const bad: Array<{ step: Record<string, unknown>; match: RegExp }> = [
+    { step: { name: "r", race: ["only one"] }, match: /race must be an array of at least 2/ },
+    { step: { name: "r", race: ["a", 3] }, match: /race must be an array of at least 2/ },
+    { step: { name: "r", race: ["a", "b"], outputAs: "Bad" }, match: /outputAs must match/ },
+    { step: { name: "r", race: ["a", "b"], model: "glm/x" }, match: /unknown key\(s\) \[model\]/ },
+  ]
+  for (const { step, match } of bad) {
+    const res = validateWorkflow({ id: "race-bad", steps: [step] }, "bad.json")
+    assert.equal(res.ok, false, JSON.stringify(step))
+    assert.match(res.error, match, JSON.stringify(step))
+  }
+})
+
+test("run: pipeline 条目并发展开（{{item}} 替换 + 模板解析 + 顺序对齐 + outputAs 入 state）", async () => {
+  const echo = new EchoExecutor()
+  setExecutor(echo)
+  const checked = validateWorkflow(
+    {
+      id: "pipe-run",
+      steps: [
+        {
+          name: "fanout",
+          pipeline: "分析 {{item}}（主题 {{topic}}）",
+          items: ["{{topic}}-甲", "{{topic}}-乙", "{{topic}}-丙"],
+          outputAs: "reports",
+        },
+        { name: "summary", agent: "汇总：{{steps.fanout}}" },
+      ],
+      output: "{{steps.fanout}}",
+    },
+    "pipe-run.json",
+  )
+  assert.equal(checked.ok, true)
+  const def = toDefinition(checked.value)
+  const result = await def.run(
+    { topic: "T" },
+    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
+  )
+  // 每条目一次 agent 调用，{{item}} 已替换、其余模板照常解析
+  assert.equal(echo.prompts.length, 4) // 3 条目 + 1 汇总
+  assert.equal(echo.prompts[0], "分析 T-甲（主题 T）")
+  assert.equal(echo.prompts[2], "分析 T-丙（主题 T）")
+  // 汇总步能引用 fanout 输出（JSON 数组串）
+  assert.ok(echo.prompts[3]!.startsWith("汇总：[\"echo:分析 T-甲"))
+  // 输出模板拿到的是结果数组（与 items 对齐）
+  const parsed = JSON.parse((result as { output: string }).output)
+  assert.equal(parsed.length, 3)
+  assert.ok(parsed[0]!.startsWith("echo:分析 T-甲"))
+  assert.ok(parsed[2]!.startsWith("echo:分析 T-丙"))
+})
+
+test("run: pipeline {{item}} 字面替换对 $ 与花括号安全", async () => {
+  const echo = new EchoExecutor()
+  setExecutor(echo)
+  const checked = validateWorkflow(
+    {
+      id: "pipe-special",
+      steps: [
+        { name: "fanout", pipeline: "quote {{item}} now", items: ["cost $100 {x} & $`backtick`"] },
+      ],
+      output: "done",
+    },
+    "pipe-special.json",
+  )
+  assert.equal(checked.ok, true)
+  const def = toDefinition(checked.value)
+  await def.run(
+    { topic: "T" },
+    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
+  )
+  assert.equal(echo.prompts[0], "quote cost $100 {x} & $`backtick` now")
+})
+
+test("run: race 首个成功者胜出（慢分支不拖整体），outputAs 入 state", async () => {
+  // 按提示标记控速：slow 分支延迟 40ms，fast 分支立即
+  class PacedExecutor implements AgentExecutor {
+    readonly prompts: string[] = []
+    async execute(task: AgentTask) {
+      this.prompts.push(task.prompt)
+      if (task.prompt.includes("SLOW")) {
+        await new Promise((r) => setTimeout(r, 40))
+      }
+      return { output: `done(${task.prompt})` }
+    }
+  }
+  const ex = new PacedExecutor()
+  setExecutor(ex)
+  const checked = validateWorkflow(
+    {
+      id: "race-run",
+      steps: [
+        {
+          name: "fastest",
+          race: ["SLOW 深思方案 {{topic}}", "FAST 直觉方案 {{topic}}"],
+          outputAs: "winner",
+        },
+        { name: "report", agent: "胜者是 {{steps.fastest}}" },
+      ],
+      output: "{{steps.fastest}}",
+    },
+    "race-run.json",
+  )
+  assert.equal(checked.ok, true)
+  const def = toDefinition(checked.value)
+  const result = await def.run(
+    { topic: "T" },
+    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
+  )
+  assert.equal((result as { output: string }).output, "done(FAST 直觉方案 T)")
+  assert.equal(ex.prompts.length, 3) // 两个竞速分支 + 汇报步
+})
+
+test("run: pipeline 条目失败走 fail-loud（WorkflowPipelineError，不塌缩 null）", async () => {
+  class FlakyExecutor implements AgentExecutor {
+    async execute(task: AgentTask) {
+      if (task.prompt.includes("毒条目")) {
+        throw new Error("agent exploded")
+      }
+      return { output: "ok" }
+    }
+  }
+  setExecutor(new FlakyExecutor())
+  const checked = validateWorkflow(
+    {
+      id: "pipe-fail",
+      steps: [
+        { name: "fanout", pipeline: "处理 {{item}}", items: ["正常条目", "毒条目"] },
+      ],
+    },
+    "pipe-fail.json",
+  )
+  assert.equal(checked.ok, true)
+  const def = toDefinition(checked.value)
+  await assert.rejects(
+    def.run(
+      { topic: "T" },
+      { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
+    ),
+    (error: unknown) => {
+      // sequence 层把步骤错误包成 WorkflowSequenceError；步骤级 cause 是
+      // WorkflowPipelineError（fail-loud 不塌缩，聚合信息在 message 里）
+      const err = error as Error & { errors?: Array<{ message?: string }> }
+      assert.equal(err.name, "WorkflowSequenceError")
+      assert.match(err.message, /agent exploded|毒条目|pipeline/i)
+      return true
+    },
+  )
+})
+
+test("装载: pipeline/race 声明文件经 loadDeclarativeWorkflows 正常注册", async () => {
+  await writeWorkflow(
+    "pipe-load.json",
+    {
+      id: "pipe-load",
+      steps: [{ name: "fanout", pipeline: "f {{item}}", items: ["a", "b"] }],
+    },
+  )
+  await writeWorkflow(
+    "race-load.json",
+    { id: "race-load", steps: [{ name: "fastest", race: ["p1 {{topic}}", "p2 {{topic}}"] }] },
+  )
+  const { definitions, errors } = await loadDeclarativeWorkflows(
+    [path.join(baseDir, "pipe-load.json"), path.join(baseDir, "race-load.json")],
+    baseDir,
+  )
+  assert.deepEqual(errors, [])
+  assert.deepEqual(definitions.map((d) => d.id).sort(), ["pipe-load", "race-load"])
 })
