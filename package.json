@@ -27,6 +27,9 @@
   ],
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
+  "bin": {
+    "opencode-agentic-workflow": "./dist/cli/index.js"
+  },
   "files": [
     "dist",
     "skills"
@@ -58,15 +61,17 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@clack/prompts": "^1.8.1",
     "@opencode/plugin": "^2.0.22",
-    "solid-js": "1.9.12",
+    "@opentui/core": "0.5.14",
     "@opentui/solid": "0.5.14",
-    "@opentui/core": "0.5.14"
+    "jsonc-parser": "^3.3.1",
+    "solid-js": "1.9.12"
   },
   "devDependencies": {
+    "@opencode/theme": "^2.0.22",
     "@types/node": "^26.6.4",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "@opencode/theme": "^2.0.22"
+    "typescript": "^7.0.2"
   }
 }

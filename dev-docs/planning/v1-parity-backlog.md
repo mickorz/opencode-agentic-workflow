@@ -135,9 +135,23 @@
    parent→subflow child 真机跑通（双 journal completed + lineage +
    depth + 双流 run.progress 事件）。测试 → **308/308**。
    v1 的 Open Session 回放/节点 token 元数据详情仍未做（P2-8 遗留同源）。
-10. **Installer CLI**（S~M，等数据）——v1：`npx install/uninstall/update/doctor`
-    （配置合并 + .bak + skills 安装）。v2：手改 opencode.json（README 已验证可行）。
-    是否值得做等外部测试的安装卡点反馈。
+10. ~~**Installer CLI**（S~M，等数据）~~ ✅ **已完成（2026-10-07，P2-10）**——
+    `npx @mickorz/opencode-agentic-workflow install/update/uninstall/doctor`
+    （bin `opencode-agentic-workflow`）。v2 形态适配：plugins **对象条目**
+    合并（JSONC 保留注释、写前 .bak、幂等）；三方式 global（`~/.config/
+    opencode/opencode.json` + skills 拷贝全局扫描目录）/ project（项目
+    `opencode.json` + `.opencode/skills/`）/ locked（npm install + 本地
+    路径条目 + skills 零拷贝数组条目）；options 生成最小可用集（model +
+    agent build + journalDir `.agentic-workflow/journal`）。**无头模式**
+    （flags 指齐 + --yes 零交互，非 TTY 缺必答报错不挂起——可脚本化）。
+    卸载对称原则（v1 0.2.0 教训）：locked 无条件 npm uninstall、空数组连键
+    删、空壳配置整文件删（含 .bak）、本轮 .bak 清理；skill 目录与 journal
+    用户数据永不自动删。doctor 只读 [OK]/[WARN]/[FAIL]（Node/opencode v2/
+    条目健康/journalDir 可写/git/版本对比/node_modules 残留识别）。测试
+    +13（全量 351/351）；打包验收：npm pack → 仓库外装 tarball → bin 四
+    命令实跑全绿（install 断言条目+options+.bak+双 skills；uninstall 对称
+    清理+用户数据保留）。v2 安装方式检测踩坑记录在案（node_modules 存在
+    性不参与 project/locked 分类，残留单独成证据）。
 11. ~~**verify 增强：lens 多视角 + threshold 投票**（S）~~ ✅ **已完成（2026-10-05，
     随 0.5.0 发布）**——`passThreshold`（(0,1] 投票阈值，缺省 1 = 全票/旧行为）
     + `lenses: [{ name, criteria }]`（多视角：一个视角一个评审员、各按专属
