@@ -18,6 +18,7 @@
 | 上下文防污染（只回聚合结果） | ✓ 同一设计哲学 |
 | 自定义流程装载 | ✓ P4 声明式 JSON（v1 是 JS 脚本 + skill 生成，见 P0-2 补生成链路） |
 | token/时长统计 | ✓ metrics collector + `workflow_metrics` 工具 + 价目表成本估算（v2 多出美元成本） |
+| 进度树 + Open Session 回放 | ✓ P2-8/P2-8b 面板与节点详情 + P2-13 会话回放（sessionIDs 贯通 journal + RPC `session` 方法 + 面板 `── session` 区） |
 
 ## 二、缺口排期（按优先级序）
 
@@ -118,7 +119,15 @@
    **步骤级 token/模型元数据同日补齐**：agent 事件带 runId（ALS 作用域），
    RunJournal 订阅聚合 `agent.completed` 的 usage/model 到 currentStep
    （终态退订、reopen 重订、StepRecord 增 usage/model 字段，subflow 互不
-   串账）。Open Session 回放仍未做（依赖宿主 API，记入后续缺口）。面板视觉需
+   串账）。~~Open Session 回放仍未做（依赖宿主 API，记入后续缺口）~~
+   **Open Session 回放已补（2026-10-07，P2-13）**：executor 透传子会话 ID
+   （AgentResult/agent.completed 事件），journal 按步骤聚合 `sessionIDs`
+   （pipeline/race 多会话顺序累积，reopen 清空）；RPC 加 `session` 方法
+   （runId+step+index → 宿主 `session.context` 拉对话，user/assistant 文本，
+   单条 800 字、至多 50 条预览）；TUI 面板新增 `── session` 区自动回放最新
+   run 最后一个带会话的步骤（runId@status@step 去重 + 竞态守卫，与 detail
+   同款时序）。journal 落盘 sessionIDs 有真机 E2E 断言（pipeline 步 2 条、
+   agent 步 1 条、互异）。面板视觉需
    交互式 TUI 人工确认（server 侧链路 E2E 已证：6 连拍快照序列精确匹配；
    详情渲染函数对真实 journal 的输出有 E2E 快照）。
 9. ~~**嵌套工作流**（L，架构前置）~~ **已闭环（2026-10-06，P2-9）**——
@@ -134,7 +143,9 @@
    步骤 fail-fast 传播；TUI 进度树按 lineage 缩进渲染。E2E：声明式
    parent→subflow child 真机跑通（双 journal completed + lineage +
    depth + 双流 run.progress 事件）。测试 → **308/308**。
-   v1 的 Open Session 回放/节点 token 元数据详情仍未做（P2-8 遗留同源）。
+   ~~v1 的 Open Session 回放/节点 token 元数据详情仍未做（P2-8 遗留同源）~~
+   （节点详情/token 元数据 2026-10-06 P2-8b 补齐；Open Session 回放
+   2026-10-07 P2-13 补齐，见第 8 条）。
 10. ~~**Installer CLI**（S~M，等数据）~~ ✅ **已完成（2026-10-07，P2-10）**——
     `npx @mickorz/opencode-agentic-workflow install/update/uninstall/doctor`
     （bin `opencode-agentic-workflow`）。v2 形态适配：plugins **对象条目**

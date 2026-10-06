@@ -54,6 +54,11 @@ export interface AgentResult {
   costUSD?: number
   /** 实际使用的模型 "providerID/id"（宿主能提供时） */
   model?: string
+  /**
+   * 执行本次调用的宿主会话 ID（Open Session 回放）：宿主型 executor
+   * 填充（如 V2 子会话 ses_*）；回放侧凭它拉取完整对话。
+   */
+  sessionID?: string
 }
 
 export interface AgentExecutor {

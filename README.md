@@ -435,14 +435,36 @@ args 预览 / 每步骤的输出或错误预览（折行 + 截断）/ 步骤与�
 一次，终态转换再拉一次收尾）；未配置 `journalDir` 时详情区静默缺省，
 面板其余不受影响。
 
+### Open Session 回放
+
+每个 agent 调用实际发生在宿主子会话里（挂在主会话下，TUI 会话列表可导航）。
+v1 的「打开会话」在 v2 的对位实现：executor 把子会话 ID 透传到
+`agent.completed` 事件，journal 按步骤聚合成 `sessionIDs`（pipeline/race 步
+是多会话，按发生顺序累积；reopen 重跑会清掉旧清单）。面板据此自动回放
+**最新 run 最后一个带会话的步骤**的完整对话：
+
+```
+── session
+fanout · ses_8b1f…
+  ❯ 针对条目「回放甲」写一句结论…
+  · 回放甲：并发回放链路通畅。
+  ❯ 针对条目「回放乙」写一句结论…
+  · 回放乙：会话 ID 已贯通落盘。
+```
+
+回放经同一 RPC 的 `session` 方法拉取（`{runId, step, index?}`——index 选
+pipeline 步的第几个会话，缺省最后一个；消息取 user/assistant 文本，单条
+预览 800 字、至多 50 条）。任意步骤的会话都可经该 RPC 取回，不限于面板
+自动选择的那一个。
+
 数据链路：RunJournal 状态转换 → `run.progress` 事件总线 → ProgressBoard（容量 20，
 journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RPC。headless
 （`opencode run`）下没有 TUI 监听，转发零成本；同一份事件流也会写进 traceDir
 （`events.jsonl`），可作为无头观测替代。
 
 注意：面板渲染属交互式 TUI 行为，需在真实 TUI 里人工确认（本仓库自动化覆盖到
-server 侧链路：事件发射、board 维护、RPC 契约（snapshot/detail）均有测试与 E2E
-证据；详情渲染函数对真实 journal 的输出有 E2E 快照）。
+server 侧链路：事件发射、board 维护、RPC 契约（snapshot/detail/session）均有
+测试与 E2E 证据；journal 落盘 sessionIDs 有真机 E2E 断言）。
 
 ## 嵌套工作流（subflow）
 

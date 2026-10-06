@@ -9,7 +9,7 @@ import path from "node:path"
 import { test } from "node:test"
 
 import { ProgressBoard, bindProgressBoard, seedFromStore } from "../../src/plugin/progress-board.js"
-import { createEventBus, setEventBus, type RunProgressSnapshot } from "../../src/observability/events.js"
+import { createEventBus, emitEvent, setEventBus, type RunProgressSnapshot } from "../../src/observability/events.js"
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import { RunJournal } from "../../src/state/recorder.js"
 
@@ -248,4 +248,101 @@ test("bindProgressBoard: 无 store（未配 journalDir）时 detail 恒为 null"
   const out = (await reg.detail?.({ runId: "run_any" })) as { run: unknown }
   assert.equal(out.run, null)
   board?.dispose()
+})
+
+test("bindProgressBoard: session 方法（journal 定位步骤会话 -> 拉取 -> 截断）", async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-board-session-"))
+  const store = new FileExecutionStore(baseDir)
+
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.0.0" },
+      stepCount: 2,
+      stepNames: ["fanout", "wrap"],
+      runId: "run_sess",
+    })
+    await journal.stepStarted(0)
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess", sessionID: "ses_a" })
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess", sessionID: "ses_b" })
+    await journal.stepCompleted(0, "done")
+    await journal.stepStarted(1)
+    await journal.stepCompleted(1, "ok")
+    await journal.complete()
+  } finally {
+    setEventBus(createEventBus())
+  }
+
+  const fetched: string[] = []
+  const registrations: Array<Record<string, (input: unknown) => Promise<unknown>>> = []
+  let board: Awaited<ReturnType<typeof bindProgressBoard>> | undefined
+  board = await bindProgressBoard({
+    rpc: {
+      register: async (
+        def: unknown,
+        handlers: Record<string, (input: unknown) => Promise<unknown>>,
+      ) => {
+        registrations.push({ id: (def as { id: string }).id, ...handlers })
+        return { events: { emit: async () => {} } }
+      },
+    } as never,
+    store,
+    fetchSessionMessages: async (sessionID) => {
+      fetched.push(sessionID)
+      return [
+        { type: "user", text: "调研主题".repeat(600) },
+        { type: "assistant", text: "结论".repeat(400) },
+      ]
+    },
+  })
+
+  const reg = registrations[0]
+  assert.ok(reg)
+  assert.equal(typeof reg.session, "function")
+
+  // 命中：缺省取该步骤最后一个会话；条数保留 + 单条文本截断 800
+  const hit = (await reg.session?.({ runId: "run_sess", step: "fanout" })) as {
+    session: { sessionID: string; step?: string; messages: Array<{ type: string; text: string }> }
+  }
+  assert.deepEqual(fetched, ["ses_b"])
+  assert.equal(hit.session.sessionID, "ses_b")
+  assert.equal(hit.session.step, "fanout")
+  assert.equal(hit.session.messages.length, 2)
+  assert.ok(hit.session.messages[0]?.text.length <= 800)
+
+  // index 选第一个会话（pipeline 多条目）
+  const first = (await reg.session?.({ runId: "run_sess", step: "fanout", index: 0 })) as {
+    session: { sessionID: string }
+  }
+  assert.equal(first.session.sessionID, "ses_a")
+
+  // 未知步骤 / 无会话步骤 / 坏入参 -> null（不抛错）
+  const noStep = (await reg.session?.({ runId: "run_sess", step: "nope" })) as { session: unknown }
+  assert.equal(noStep.session, null)
+  const noSession = (await reg.session?.({ runId: "run_sess", step: "wrap" })) as { session: unknown }
+  assert.equal(noSession.session, null)
+  const malformed = (await reg.session?.({ runId: "run_sess" })) as { session: unknown }
+  assert.equal(malformed.session, null)
+
+  board.dispose()
+})
+
+test("bindProgressBoard: 无 fetchSessionMessages（旧宿主）时 session 恒为 null", async () => {
+  const registrations: Array<Record<string, (input: unknown) => Promise<unknown>>> = []
+  const board = await bindProgressBoard({
+    rpc: {
+      register: async (
+        def: unknown,
+        handlers: Record<string, (input: unknown) => Promise<unknown>>,
+      ) => {
+        registrations.push({ id: (def as { id: string }).id, ...handlers })
+        return { events: { emit: async () => {} } }
+      },
+    } as never,
+  })
+  const reg = registrations[0]
+  const out = (await reg.session?.({ runId: "run_any", step: "any" })) as { session: unknown }
+  assert.equal(out.session, null)
+  board.dispose()
 })

@@ -91,6 +91,8 @@ export interface RunStepDetail {
   usage?: { input: number; output: number; reasoning: number }
   /** 步骤内最后一次 agent 调用的模型（P2-8b 元数据） */
   model?: string
+  /** 步骤内各 agent 调用的宿主会话 ID（Open Session 回放；面板据此拉取对话） */
+  sessionIDs?: string[]
 }
 
 /** run 详情（P2-8b 节点详情 RPC 载荷：journal 单读，含预览化的步骤载荷） */
@@ -150,6 +152,7 @@ export function toRunDetail(run: WorkflowRun): RunDetail {
         : {}),
       ...(step.usage !== undefined ? { usage: step.usage } : {}),
       ...(step.model !== undefined ? { model: step.model } : {}),
+      ...(step.sessionIDs !== undefined && step.sessionIDs.length > 0 ? { sessionIDs: step.sessionIDs } : {}),
     })),
   }
 }
@@ -182,6 +185,10 @@ export class RunJournal {
         }
       }
       if (event.model) step.model = event.model
+      // Open Session 回放：会话 ID 按发生顺序累积（pipeline 步 = 多条目多会话）
+      if (event.sessionID) {
+        step.sessionIDs = [...(step.sessionIDs ?? []), event.sessionID]
+      }
     })
   }
 
@@ -342,6 +349,7 @@ export class RunJournal {
         step.output = undefined
         step.usage = undefined
         step.model = undefined
+        step.sessionIDs = undefined
         step.startedAt = undefined
         step.completedAt = undefined
       }

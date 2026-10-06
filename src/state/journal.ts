@@ -56,6 +56,8 @@ export interface WorkflowIdentity {
   usage?: StepUsage
   /** 步骤内最后一次 agent 调用的模型（P2-8b 元数据） */
   model?: string
+  /** 步骤内各 agent 调用的宿主会话 ID（Open Session 回放；pipeline 步多个） */
+  sessionIDs?: string[]
   startedAt?: number
   completedAt?: number
 }

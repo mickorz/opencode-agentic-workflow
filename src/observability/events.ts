@@ -42,6 +42,8 @@ export type WorkflowEvent = WorkflowEventBase &
         model?: string
         /** 完成调用的 run（journal 侧聚合到 currentStep） */
         runId?: string
+        /** 执行调用的宿主会话 ID（Open Session 回放；journal 侧聚合到步骤） */
+        sessionID?: string
       }
     | {
         type: "agent.failed"

@@ -12,6 +12,8 @@ import {
   parseRunDetailRequest,
   parseRunSnapshot,
   parseRunSnapshotList,
+  parseSessionReplay,
+  parseSessionReplayRequest,
 } from "../../src/plugin/progress-rpc.js"
 import type { RunProgressSnapshot } from "../../src/observability/events.js"
 
@@ -151,4 +153,52 @@ test("parseRunDetail: 透传步骤 usage/model 元数据", () => {
     reasoning: 3,
   })
   assert.equal(parseRunDetail(output)?.steps[0]?.model, "m/x")
+})
+
+test("parseSessionReplayRequest: 收窄入参（index 可选）", () => {
+  assert.deepEqual(parseSessionReplayRequest({ runId: "run_1", step: "gather" }), {
+    runId: "run_1",
+    step: "gather",
+  })
+  assert.deepEqual(
+    parseSessionReplayRequest({ runId: "run_1", step: "gather", index: 0 }),
+    { runId: "run_1", step: "gather", index: 0 },
+  )
+  // 坏入参 -> undefined
+  assert.equal(parseSessionReplayRequest({ runId: "run_1" }), undefined)
+  assert.equal(parseSessionReplayRequest({ step: "gather" }), undefined)
+  assert.equal(parseSessionReplayRequest("x"), undefined)
+  assert.equal(parseSessionReplayRequest(null), undefined)
+})
+
+test("parseSessionReplay: 收窄回放载荷（消息逐条校验）", () => {
+  const output = {
+    session: {
+      sessionID: "ses_1",
+      step: "gather",
+      messages: [
+        { type: "user", text: "q" },
+        { type: "assistant", text: "a" },
+      ],
+    },
+  }
+  assert.deepEqual(parseSessionReplay(output), {
+    sessionID: "ses_1",
+    step: "gather",
+    messages: [
+      { type: "user", text: "q" },
+      { type: "assistant", text: "a" },
+    ],
+  })
+  // step 可选
+  const noStep = parseSessionReplay({ session: { sessionID: "ses_1", messages: [] } })
+  assert.deepEqual(noStep, { sessionID: "ses_1", messages: [] })
+  // 坏载荷 -> undefined
+  assert.equal(parseSessionReplay({ session: { messages: [] } }), undefined)
+  assert.equal(parseSessionReplay({ session: { sessionID: "s" } }), undefined)
+  assert.equal(
+    parseSessionReplay({ session: { sessionID: "s", messages: [{ type: "user" }] } }),
+    undefined,
+  )
+  assert.equal(parseSessionReplay({}), undefined)
 })

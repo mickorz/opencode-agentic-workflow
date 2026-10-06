@@ -99,6 +99,7 @@ const runDetailSchema = {
             additionalProperties: false,
           },
           model: { type: "string" },
+          sessionIDs: { type: "array", items: { type: "string" } },
         },
         required: ["index", "status"],
       },
@@ -106,6 +107,23 @@ const runDetailSchema = {
   },
   required: ["runId", "workflow", "status", "startedAt", "steps"],
 } as const
+
+/** 会话回放条目（session 方法输出；文本预览化，面板/工具侧消费） */
+export interface SessionReplayMessage {
+  /** 宿主消息类型（user / assistant …） */
+  type: string
+  /** 文本内容（多 text part 合并，预览截断） */
+  text: string
+}
+
+export interface SessionReplay {
+  /** 会话 ID（回放来源；null = 找不到会话） */
+  sessionID: string
+  /** 所属步骤名（journal 定位用） */
+  step?: string
+  /** 对话消息（时间顺序；条数与单条长度均截断） */
+  messages: SessionReplayMessage[]
+}
 
 export const ProgressRpc = Rpc.define({
   id: "agentic-workflow-progress",
@@ -142,6 +160,55 @@ export const ProgressRpc = Rpc.define({
           run: { oneOf: [runDetailSchema, { type: "null" }] },
         },
         required: ["run"],
+        additionalProperties: false,
+      },
+    },
+    /**
+     * TUI -> server：Open Session 回放——按 runId + 步骤名取该步骤子会话的
+     * 完整对话（文本预览）。index 选多会话步骤（pipeline）的第几个，缺省最后。
+     */
+    session: {
+      input: {
+        type: "object",
+        properties: {
+          runId: { type: "string" },
+          step: { type: "string" },
+          index: { type: "number" },
+        },
+        required: ["runId", "step"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
+          session: {
+            oneOf: [
+              {
+                type: "object",
+                properties: {
+                  sessionID: { type: "string" },
+                  step: { type: "string" },
+                  messages: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        type: { type: "string" },
+                        text: { type: "string" },
+                      },
+                      required: ["type", "text"],
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                required: ["sessionID", "messages"],
+                additionalProperties: false,
+              },
+              { type: "null" },
+            ],
+          },
+        },
+        required: ["session"],
         additionalProperties: false,
       },
     },
@@ -235,4 +302,39 @@ export function parseRunDetail(data: unknown): RunDetail | undefined {
     if (typeof s.index !== "number" || typeof s.status !== "string") return undefined
   }
   return run as RunDetail
+}
+
+/** 收窄 session 方法入参；不合法返回 undefined */
+export function parseSessionReplayRequest(
+  data: unknown,
+): { runId: string; step: string; index?: number } | undefined {
+  if (typeof data !== "object" || data === null) return undefined
+  const req = data as { runId?: unknown; step?: unknown; index?: unknown }
+  if (typeof req.runId !== "string" || typeof req.step !== "string") return undefined
+  return {
+    runId: req.runId,
+    step: req.step,
+    ...(typeof req.index === "number" ? { index: req.index } : {}),
+  }
+}
+
+/** 收窄 session 方法输出；不合法返回 undefined */
+export function parseSessionReplay(data: unknown): SessionReplay | undefined {
+  if (typeof data !== "object" || data === null) return undefined
+  const out = data as { session?: unknown }
+  if (typeof out.session !== "object" || out.session === null) return undefined
+  const session = out.session as { sessionID?: unknown; step?: unknown; messages?: unknown }
+  if (typeof session.sessionID !== "string" || !Array.isArray(session.messages)) return undefined
+  const messages: SessionReplayMessage[] = []
+  for (const message of session.messages) {
+    if (typeof message !== "object" || message === null) return undefined
+    const m = message as { type?: unknown; text?: unknown }
+    if (typeof m.type !== "string" || typeof m.text !== "string") return undefined
+    messages.push({ type: m.type, text: m.text })
+  }
+  return {
+    sessionID: session.sessionID,
+    ...(typeof session.step === "string" ? { step: session.step } : {}),
+    messages,
+  }
 }

@@ -10,6 +10,8 @@ import {
   renderDetailLines,
   renderDetailSection,
   renderPanelLines,
+  renderSessionLines,
+  renderSessionSection,
   toRunViewModel,
 } from "../../src/plugin/progress-view.js"
 import type { RunDetail } from "../../src/state/recorder.js"
@@ -258,4 +260,71 @@ test("renderDetailLines: 步骤 token/模型元数据后缀", () => {
   assert.equal(lines[3], "    → o")
   // 无元数据步骤不加后缀（0 时长按 "0s"）
   assert.equal(lines[4], "  ✓ check  0s")
+})
+
+test("renderSessionLines: 步骤头 + 逐消息前缀 + 折行与行数预算", () => {
+  const replay = {
+    sessionID: "ses_abc123",
+    step: "gather",
+    messages: [
+      { type: "user", text: "调研 A" },
+      { type: "assistant", text: "结论 B" },
+      { type: "tool", text: "其他类型缩进" },
+    ],
+  }
+  // 不折行：头行一步骤名+会话 ID，消息带类型前缀
+  const lines = renderSessionLines(replay)
+  assert.equal(lines[0], "gather · ses_abc123")
+  assert.equal(lines[1], "❯ 调研 A")
+  assert.equal(lines[2], "· 结论 B")
+  assert.equal(lines[3], "↳ 其他类型缩进")
+
+  // 定宽折行：长文本按宽度切块，续行缩进两格
+  const wrapped = renderSessionLines(
+    { sessionID: "s", messages: [{ type: "user", text: "abcdefghijk" }] },
+    8,
+  )
+  assert.deepEqual(wrapped, ["s", "❯ abcdefgh", "  ijk"])
+
+  // 行数预算：超出截断加 …
+  const capped = renderSessionLines(
+    { sessionID: "s", messages: [{ type: "assistant", text: "x".repeat(100) }] },
+    8,
+    3,
+  )
+  assert.equal(capped.length, 4)
+  assert.equal(capped[capped.length - 1], "…")
+
+  // 无步骤名时头行只有会话 ID
+  assert.equal(renderSessionLines({ sessionID: "s", messages: [] })[0], "s")
+})
+
+test("renderSessionSection: 属于板上最新 run 才输出，否则空", () => {
+  const runs: RunProgressSnapshot[] = [
+    {
+      runId: "run_new",
+      workflow: { id: "w", version: "1.0.0" },
+      status: "completed",
+      startedAt: 2,
+      steps: [{ index: 0, status: "completed" }],
+    },
+    {
+      runId: "run_old",
+      workflow: { id: "w", version: "1.0.0" },
+      status: "completed",
+      startedAt: 1,
+      steps: [{ index: 0, status: "completed" }],
+    },
+  ]
+  const session = { runId: "run_new", step: "gather", lines: ["gather · ses_1", "❯ q"] }
+  assert.deepEqual(renderSessionSection(runs, session), [
+    "── session",
+    "gather · ses_1",
+    "❯ q",
+  ])
+  // 非最新 run / 空行 / 缺席 -> 空
+  assert.deepEqual(renderSessionSection(runs, { ...session, runId: "run_old" }), [])
+  assert.deepEqual(renderSessionSection(runs, { ...session, lines: [] }), [])
+  assert.deepEqual(renderSessionSection(runs, undefined), [])
+  assert.deepEqual(renderSessionSection([], session), [])
 })

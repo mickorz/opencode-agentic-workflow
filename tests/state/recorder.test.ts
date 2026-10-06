@@ -313,6 +313,71 @@ test("P2-8b 步骤元数据：agent.completed 按 runId 聚合到 currentStep（
   }
 })
 
+test("Open Session 回放：agent.completed 的 sessionID 按序聚合到 currentStep", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.0.0" },
+      stepCount: 2,
+      stepNames: ["gather", "verify"],
+      runId: "run_sess",
+    })
+    await journal.stepStarted(0)
+    // 他 run 的会话不落
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_other", sessionID: "ses_other" })
+    // 本 run 两笔（pipeline 步多会话，按发生顺序累积）
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess", sessionID: "ses_1" })
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess", sessionID: "ses_2" })
+    // 无 sessionID（宿主型 executor 之外）不追加
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess" })
+    await journal.stepCompleted(0, "done")
+    await journal.stepStarted(1)
+    await journal.stepCompleted(1, "ok")
+    await journal.complete()
+
+    const loaded = await store.getRun("run_sess")
+    assert.deepEqual(loaded?.steps[0]?.sessionIDs, ["ses_1", "ses_2"])
+    assert.equal(loaded?.steps[1]?.sessionIDs, undefined)
+
+    // detail 投影携带（面板据此发起回放 RPC）
+    const detail = toRunDetail(journal.run)
+    assert.deepEqual(detail.steps[0]?.sessionIDs, ["ses_1", "ses_2"])
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("Open Session 回放：reopen 重置清空 sessionIDs，重跑重新聚合", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "demo", version: "1.0.0" },
+      stepCount: 1,
+      stepNames: ["only"],
+      runId: "run_sess2",
+    })
+    await journal.stepStarted(0)
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess2", sessionID: "ses_stale" })
+    const boom = new Error("failed")
+    await journal.stepFailed(0, boom)
+    await journal.fail(boom)
+
+    await journal.reopen()
+    // 非完成步骤重置：会话清单一并清空（旧会话不再属于本步骤）
+    assert.equal(journal.run.steps[0]?.sessionIDs, undefined)
+
+    await journal.stepStarted(0)
+    emitEvent({ type: "agent.completed", durationMs: 5, outputLength: 5, runId: "run_sess2", sessionID: "ses_fresh" })
+    await journal.stepCompleted(0, "ok")
+    await journal.complete()
+    assert.deepEqual(journal.run.steps[0]?.sessionIDs, ["ses_fresh"])
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
 test("P2-8b reopen 重订：failed run reopen 后元数据重新聚合", async () => {
   const bus = createEventBus()
   setEventBus(bus)

@@ -25,14 +25,19 @@ import {
   parseRunDetail,
   parseRunSnapshot,
   parseRunSnapshotList,
+  parseSessionReplay,
 } from "./progress-rpc.js"
 import {
   renderDetailLines,
   renderDetailSection,
   renderPanelLines,
+  renderSessionLines,
+  renderSessionSection,
   type DetailSection,
+  type SessionSection,
 } from "./progress-view.js"
 import type { RunProgressSnapshot } from "../observability/events.js"
+import type { RunDetail } from "../state/recorder.js"
 
 type TuiContext = Plugin.Context
 
@@ -100,6 +105,41 @@ function setupProgressPanel(ctx: TuiContext): () => void {
   const [detail, setDetail] = createSignal<DetailSection | undefined>()
   // 去重键：runId@status——同一状态下只拉一次，终态转换再拉一次收尾
   let detailKey = ""
+  const [session, setSession] = createSignal<SessionSection | undefined>()
+  let sessionKey = ""
+
+  /**
+   * Open Session 回放按需拉取：取详情里最后一个带会话的步骤（最新 agent
+   * 活动）的最后一个会话。key = runId@status@step 去重；慢回包竞态守卫
+   * 同 detail。任意步骤可经同一 RPC（index 选多会话步骤的第几个）。
+   */
+  const refreshSession = (runId: string, parsed: RunDetail | undefined): void => {
+    if (!parsed) return
+    const withSessions = parsed.steps.filter(
+      (step) => step.sessionIDs !== undefined && step.sessionIDs.length > 0,
+    )
+    const target = withSessions[withSessions.length - 1]
+    if (target === undefined || target.name === undefined) return
+    const key = `${runId}@${parsed.status}@${target.name}`
+    if (key === sessionKey) return
+    sessionKey = key
+    void ctx.client
+      .rpc(ProgressRpc)
+      .session({ runId, step: target.name })
+      .then((output) => {
+        if (key !== sessionKey) return
+        const replay = parseSessionReplay(output)
+        setSession(
+          replay
+            ? { runId, step: target.name!, lines: renderSessionLines(replay) }
+            : undefined,
+        )
+      })
+      .catch(() => {
+        if (key !== sessionKey) return
+        setSession(undefined)
+      })
+  }
 
   /** 节点详情按需拉取（journal 单读；无 journal/旧 server -> 空行区，不重试轰炸） */
   const refreshDetail = (snapshot: RunProgressSnapshot): void => {
@@ -118,6 +158,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
             ? { runId: snapshot.runId, lines: renderDetailLines(parsed) }
             : { runId: snapshot.runId, lines: [] },
         )
+        refreshSession(snapshot.runId, parsed)
       })
       .catch(() => {
         if (key !== detailKey) return
@@ -161,6 +202,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
             ? [
                 ...renderPanelLines(runs()),
                 ...renderDetailSection(runs(), detail()),
+                ...renderSessionSection(runs(), session()),
               ]
             : ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
           ).map((line) => (

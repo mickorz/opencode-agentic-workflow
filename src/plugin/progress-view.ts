@@ -182,6 +182,59 @@ export function renderDetailSection(
   return ["── detail", ...detail.lines]
 }
 
+/** TUI 侧会话回放缓存条目（runId@step 去重键 + 预渲染行） */
+export interface SessionSection {
+  runId: string
+  step: string
+  lines: string[]
+}
+
+/** 会话回放区行：缓存属于板上最新 run 时输出（头行分隔），否则空 */
+export function renderSessionSection(
+  runs: readonly RunProgressSnapshot[],
+  session: SessionSection | undefined,
+): string[] {
+  const newest = runs[0]
+  if (!newest || !session || session.runId !== newest.runId || session.lines.length === 0) {
+    return []
+  }
+  return ["── session", ...session.lines]
+}
+
+/** 消息类型的行前缀（与面板既有图标语言一致：❯ 提问 / · 回答 / ↳ 其他） */
+function sessionMessagePrefix(type: string): string {
+  if (type === "user") return "❯ "
+  if (type === "assistant") return "· "
+  return "↳ "
+}
+
+/**
+ * 回放载荷 -> 预渲染行：步骤头（步骤名 + 会话 ID）+ 逐消息折行块，
+ * 总行数预算 maxLines（超出尾缀 …）。纯函数，单测覆盖。
+ */
+export function renderSessionLines(
+  replay: {
+    sessionID: string
+    step?: string
+    messages: ReadonlyArray<{ type: string; text: string }>
+  },
+  maxWidth?: number,
+  maxLines = 24,
+): string[] {
+  const header = `${replay.step !== undefined ? `${replay.step} · ` : ""}${replay.sessionID}`
+  const lines: string[] = [header]
+  for (const message of replay.messages) {
+    if (lines.length >= maxLines) break
+    const prefix = sessionMessagePrefix(message.type)
+    const wrapped = wrapPreview(message.text, maxWidth, 3)
+    for (let i = 0; i < wrapped.length && lines.length < maxLines; i++) {
+      lines.push(i === 0 ? `${prefix}${wrapped[i]}` : `  ${wrapped[i]}`)
+    }
+  }
+  if (lines.length >= maxLines) lines.push("…")
+  return lines
+}
+
 /** 单段预览 -> 折行块（宽度不定时按单行原样；超出行数截断加 …） */
 function wrapPreview(
   text: string,

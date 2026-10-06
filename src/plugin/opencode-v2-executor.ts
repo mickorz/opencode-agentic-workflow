@@ -127,6 +127,8 @@ export class OpenCodeV2Executor implements AgentExecutor {
                   : (usage && model ? this.estimateCost?.(model, usage) : undefined) ??
                     message.cost,
               model,
+              // Open Session 回放：journal 按步骤聚合，详情/回放按它拉取完整对话
+              sessionID,
             }
           }
           // assistant 存在但无文本：带出底层错误信息（如 provider 限流），便于排查

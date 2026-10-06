@@ -58,6 +58,7 @@ import { OpenCodeV2Executor, type ExecutorModelRef } from "./opencode-v2-executo
 import { buildPriceTable, estimateCostUSD } from "./price-table.js"
 import { PolicyCheckpointGate, type CheckpointPolicy } from "./policy-checkpoint-gate.js"
 import { bindProgressBoard } from "./progress-board.js"
+import type { SessionReplayMessage } from "./progress-rpc.js"
 import { buildCheckpointGate, parseCheckpointModeOverride } from "./checkpoint-override.js"
 import { isInsideRunSession } from "./run-sessions.js"
 
@@ -264,11 +265,34 @@ export default Plugin.define({
       console.log(`[agentic-workflow] journal store: ${journalDir}`)
     }
 
-    // P2-8 TUI 进度树数据面：订阅 run.progress 事件 + 注册 snapshot RPC。
-    // 无条件启用——无 TUI 监听时 RPC 转发是 no-op 成本；journal 未配置时
-    // board 仍实时（只是没有历史种子）。
+    // P2-8 TUI 进度树数据面：订阅 run.progress 事件 + 注册 snapshot/detail/
+    // session RPC。无条件启用——无 TUI 监听时 RPC 转发是 no-op 成本；journal
+    // 未配置时 board 仍实时（只是没有历史种子）。
     try {
-      await bindProgressBoard({ rpc: ctx.rpc, ...(store ? { store } : {}) })
+      await bindProgressBoard({
+        rpc: ctx.rpc,
+        ...(store ? { store } : {}),
+        // Open Session 回放数据源：宿主会话消息（user 扁平 text；assistant
+        // 取 content 的 text part 合并；其余类型不进回放）
+        fetchSessionMessages: async (sessionID): Promise<SessionReplayMessage[]> => {
+          const messages = await ctx.session.context({ sessionID })
+          return messages.flatMap((message): SessionReplayMessage[] => {
+            if (message.type === "user") {
+              const text = message.text.trim()
+              return text.length > 0 ? [{ type: message.type, text }] : []
+            }
+            if (message.type === "assistant") {
+              const text = message.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n")
+                .trim()
+              return text.length > 0 ? [{ type: message.type, text }] : []
+            }
+            return []
+          })
+        },
+      })
       console.log("[agentic-workflow] progress board: live (TUI /workflow panel)")
     } catch (error) {
       // 注册失败不阻断插件（RPC 域不可用等极端情况）

@@ -171,6 +171,7 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
       usage: result.usage,
       costUSD: result.costUSD,
       model: result.model,
+      ...(result.sessionID !== undefined ? { sessionID: result.sessionID } : {}),
       ...(runId ? { runId } : {}),
     })
     return result

@@ -65,6 +65,8 @@ test("executor: create -> prompt -> wait -> context and extracts assistant text"
   const result = await executor.execute({ prompt: "分析" })
 
   assert.equal(result.output, "第一段\n第二段")
+  // Open Session 回放：结果携带宿主子会话 ID（journal 聚合依据）
+  assert.equal(result.sessionID, "sess_1")
 
   assert.deepEqual(
     fake.calls.map((c) => c.method),
