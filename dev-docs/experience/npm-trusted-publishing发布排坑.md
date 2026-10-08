@@ -102,17 +102,16 @@ npm error 404 The requested resource '...@0.4.0' could not be found
 **所有** publish 打的迁移公告，**不是** classic-token 路径的标志（env 干净
 的 OIDC 成功发布里也会出现）。不要围绕它修。
 
-## 最终可用的发布流（~~已验证~~ ⚠️ CI 段未验证，见坑G）
-
-> **2026-10-08 更正**：下方 CI OIDC 段实际从未成功过（0.3.2/0.4.0 均为
-> 本地发布，见坑G 考古）。本节保留仅为历史记录，勿据此假设 CI 可用。
+## 最终可用的发布流（✅ 已验证——2026-10-08 08:57Z 0.5.0 经 CI OIDC 上架）
 
 ```text
-本地: npm version patch && git push --follow-tags
-CI:  checkout@v6 → setup-node@v7(node24, registry-url, no cache)
-     → npm ci → 版本一致性校验 → typecheck → test → build
-     → npm publish --access public（OIDC，无 token）
-修正表单后验证: gh run rerun <id> --failed（无需新版本号）
+本地: npm version <patch|minor> && git push --follow-tags
+CI:  checkout@v6 → setup-node@v7(node24, 无 registry-url, no cache)
+     → 清理 .npmrc 占位 _authToken → npm ci → 版本一致性校验
+     → typecheck → test → build → npm publish --access public（OIDC）
+验证: run 日志出现 "Signed provenance statement"（坑H 判别法）
+      + registry dist-tags latest 指向新版本（传播延迟 ~1min）
+TP:  条目已 validated（首次成功发布完成）——豁免 48h 过期，勿改仓库/身份
 ```
 
 ## 产物核验
@@ -237,3 +236,21 @@ issue 实录 / run 37733685262 日志），定案如下。**此前坑G 留下的
 
 三凶独立存在、逐个都能单独挡死发布——单变量排查永远修不完。
 修复后首跑若仍 404：按坑G 判别要点区分（URL 形态 + 有无 oidc 痕迹）。
+
+### 坑H 结局（2026-10-08 08:57Z）：CI OIDC 首次成功，0.5.0 上架
+
+修复落地序列（全部当日完成）：
+
+1. `npm login`（本机 token 过期是 trust 命令 401 的原因；坑F 教训下走
+   浏览器正常 2FA，未碰恢复码）
+2. `npx -y npm@latest trust list` → 空（旧尸体条目已不在，省一步 revoke；
+   本机 npm 11.9 无 trust 子命令，npx 拉最新即可，Node 25 警告无害）
+3. `npx -y npm@latest trust github … --allow-publish -y` → 条目创建
+   （权限实际给了 publish + stage publish 两个）
+4. 移 tag（`git tag -f v0.5.0 main && git push -f origin v0.5.0`，未发布
+   版本允许移）→ run `37753094523` 32s 全绿
+5. 成功判别三件套全中：`Signed provenance statement`（OIDC 真实走通，
+   此前 5 连败日志里从未出现）→ registry `latest: 0.5.0`（传播延迟约
+   1 分钟，别急着重试）→ `bin` 字段完好（坑H-3 修复端到端生效）
+
+TP 条目就此 **validated**——永久豁免 48h 过期（除非更改仓库/身份）。
