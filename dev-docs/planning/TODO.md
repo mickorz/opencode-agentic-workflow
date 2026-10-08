@@ -18,7 +18,14 @@ npm version <patch|minor> && git push --follow-tags
 
 踩坑全记录：`dev-docs/experience/npm-trusted-publishing发布排坑.md`（坑A–H）。
 
-### 人工验收（已解锁——0.5.0 已上架，npx 直装路线可用）
+### 人工验收（已解锁——0.5.1 起面板可用，见下方修复记录）
+
+> **0.5.0 → 0.5.1 修复（2026-10-08 晚）**：0.5.0 的 TUI 入口在真实宿主里
+> **从未加载成功过**（`Keymap.Provider is missing`，坑见
+> `dev-docs/experience/tui插件keymap与peer打包.md`）——E2E 全走
+> `opencode run`（role=server），从未覆盖 role=cli。0.5.1 修复
+> keymap 挂载点 + opentui/solid-js 改 peer 打包。**P 组用例请在 0.5.1
+> 上执行**；I-1 记录的安装体验不受影响。
 
 面板渲染 + 安装器交互路径手动验收——清单已备好：
 `dev-docs/planning/手动验收-面板与安装器.md`（P-1…P-8 面板 / I-1…I-9 安装器）

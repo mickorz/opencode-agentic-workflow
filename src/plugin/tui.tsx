@@ -194,41 +194,53 @@ function setupProgressPanel(ctx: TuiContext): () => void {
   // 面板 claim：宿主选中我们的内容名时才渲染；其余名字让位（返回空 fragment）
   const offSlot = ctx.ui.slot({
     append: "session.panel",
-    render: (input) =>
-      input.name === PANEL_NAME ? (
-        <box flexDirection="column" paddingLeft={1} paddingRight={1}>
-          {/* 视图行全部来自纯函数层；signal 读取发生在 JSX 内（响应式追踪） */}
-          {(live() || runs().length > 0
-            ? [
-                ...renderPanelLines(runs()),
-                ...renderDetailSection(runs(), detail()),
-                ...renderSessionSection(runs(), session()),
-              ]
-            : ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
-          ).map((line) => (
-            <text>{line}</text>
-          ))}
-        </box>
-      ) : (
-        <></>
-      ),
+    render: (input) => {
+      return (
+        input.name === PANEL_NAME ? (
+          <box flexDirection="column" paddingLeft={1} paddingRight={1}>
+            {/* 视图行全部来自纯函数层；signal 读取发生在 JSX 内（响应式追踪） */}
+            {(live() || runs().length > 0
+              ? [
+                  ...renderPanelLines(runs()),
+                  ...renderDetailSection(runs(), detail()),
+                  ...renderSessionSection(runs(), session()),
+                ]
+              : ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
+            ).map((line) => (
+              <text>{line}</text>
+            ))}
+          </box>
+        ) : (
+          <></>
+        )
+      )
+    },
   })
 
   // /workflow 命令 + 命令面板入口
-  ctx.keymap.layer(() => ({
-    commands: [
-      {
-        id: "agentic-workflow.panel",
-        title: "Workflow progress",
-        group: "Agentic Workflow",
-        palette: true,
-        slash: { name: "workflow" },
-        run: () => {
-          ctx.ui.panel.open(PANEL_NAME)
-        },
-      },
-    ],
-  }))
+  // keymap.layer 必须在组件/slot 渲染上下文内调用（宿主 2.0.22 在 setup 顶层调用会抛
+  // "Keymap.Provider is missing"）；官方 session.panel 示例用 append:"app" 空渲染挂载。
+  ctx.ui.slot({
+    append: "app",
+    render: () => {
+      ctx.keymap.layer(() => ({
+        mode: "global",
+        commands: [
+          {
+            id: "agentic-workflow.panel",
+            title: "Workflow progress",
+            group: "Agentic Workflow",
+            palette: true,
+            slash: { name: "workflow" },
+            run: () => {
+              ctx.ui.panel.open(PANEL_NAME)
+            },
+          },
+        ],
+      }))
+      return null
+    },
+  })
 
   return () => {
     offEvent()

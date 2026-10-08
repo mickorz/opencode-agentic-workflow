@@ -93,7 +93,14 @@ export class SchedulerService {
     if (this.timer) return
     const tickMs = this.deps.tickMs ?? 15_000
     this.timer = setInterval(() => {
-      void this.tick()
+      // 目录被外部清理等场景下 tick 可能失败：接住并降级为单行日志，
+      // 绝不让 rejection 逃逸成宿主侧 unhandled rejection 刷屏（坑I 实测）
+      this.tick().catch((error) => {
+        console.log(
+          `[agentic-workflow] scheduler tick failed (dir ${this.deps.dir}): ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
     }, tickMs)
     // 不阻止宿主进程退出（调度器随宿主存活，进程退出即停）
     if (typeof this.timer.unref === "function") this.timer.unref()
