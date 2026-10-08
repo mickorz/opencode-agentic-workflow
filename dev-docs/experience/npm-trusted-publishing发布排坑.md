@@ -149,12 +149,11 @@ CI:  checkout@v6 → setup-node@v7(node24, registry-url, no cache)
      弄丢，或 npm 新 UI 重存时重置）
   2. 恢复码再次使用 → 冻结真生效（只有账号本人知道）
 
-**处置**（0.5.0 卡在此，tag 不动）：
+**处置**（0.5.0 卡在此，tag 不动；**只走 CI，不做本地发布**——账号所有者
+拍板：后期发布形态就是「推 tag → GitHub Actions 自动发布」，本地兜底移除）：
 
 1. npmjs.com 核对/重存 TP 表单（字段清单见 `planning/TODO.md`，
    含 `Allowed actions: ☑ npm publish` 与 `Allow npm dist-tag`）
 2. `gh run rerun 37733685262 --failed`（版本号/tag 都不动）
 3. 仍 404 且确认没碰过恢复码 → 删 TP 条目重建（npm 保存不校验，
    旧条目可能带不可见的坏状态；重建按字段清单逐项填）
-4. 等不了表单排障时兜底：本地 `npm publish`（publish.yml 头部路径，
-   前三个版本实际都是这么发的）
