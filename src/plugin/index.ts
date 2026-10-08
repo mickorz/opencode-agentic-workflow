@@ -48,7 +48,7 @@ import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
 import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
-import { loadDeclarativeWorkflows } from "../workflows/loader.js"
+import { loadCustomWorkflows } from "../workflows/loader.js"
 import { GitWorktreeProvider, InPlaceWorkspaceProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
@@ -212,7 +212,7 @@ export default Plugin.define({
     const builtinIds = ["smoke", "reliable", "artifact", "feature-development"]
     const projectDir = ctx.location.directory
     if (options.workflows && options.workflows.length > 0) {
-      const loaded = await loadDeclarativeWorkflows(
+      const loaded = await loadCustomWorkflows(
         options.workflows,
         projectDir,
         builtinIds,
@@ -245,12 +245,13 @@ export default Plugin.define({
     }
 
     // P0-2 workflow_define 的落盘目标：从 options.workflows 推导候选目录
-    // （.json 文件条目取其父目录；其余条目视为目录本身——不要求已存在，
-    // define 时 mkdir -p）。相对路径同装载器基准 = 项目目录。
+    // （.json/.js/.mjs/.cjs 文件条目取其父目录；其余条目视为目录本身——
+    // 不要求已存在，define 时 mkdir -p）。相对路径同装载器基准 = 项目目录。
     const flowsDirs: string[] = []
     for (const entry of options.workflows ?? []) {
       const resolved = path.isAbsolute(entry) ? entry : path.join(projectDir, entry)
-      const dir = resolved.endsWith(".json") ? path.dirname(resolved) : resolved
+      const isFileEntry = /\.(json|js|mjs|cjs)$/.test(resolved)
+      const dir = isFileEntry ? path.dirname(resolved) : resolved
       if (!flowsDirs.includes(dir)) flowsDirs.push(dir)
     }
 

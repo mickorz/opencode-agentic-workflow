@@ -565,3 +565,105 @@ test("装载: pipeline/race 声明文件经 loadDeclarativeWorkflows 正常注�
   assert.deepEqual(errors, [])
   assert.deepEqual(definitions.map((d) => d.id).sort(), ["pipe-load", "race-load"])
 })
+
+// ---------------------------------------------------------------------------
+// P2-14 代码流程装载（.js/.mjs/.cjs 模块 → WorkflowDefinition）
+// ---------------------------------------------------------------------------
+
+import { loadCustomWorkflows } from "../../src/workflows/loader.js"
+
+test("代码装载：.mjs default export / .cjs module.exports / named definition 三形态全收", async () => {
+  await writeWorkflow(
+    "code-default.mjs",
+    `export default { id: "code-default", version: "1.0.0", description: "mjs default",
+      stepNames: ["a"], run: async () => ({ output: "ok" }) }`,
+  )
+  await writeWorkflow(
+    "code-cjs.cjs",
+    `module.exports = { id: "code-cjs", version: "1.0.0",
+      stepNames: ["a"], run: async () => ({ output: "ok" }) }`,
+  )
+  await writeWorkflow(
+    "code-named.mjs",
+    `export const definition = { id: "code-named", version: "1.0.0",
+      stepNames: ["a"], run: async () => ({ output: "ok" }) }`,
+  )
+  const { definitions, errors } = await loadCustomWorkflows(
+    ["code-default.mjs", "code-cjs.cjs", "code-named.mjs"].map((n) => path.join(baseDir, n)),
+    baseDir,
+  )
+  assert.deepEqual(errors, [])
+  assert.deepEqual(
+    definitions.map((d) => d.id).sort(),
+    ["code-cjs", "code-default", "code-named"],
+  )
+  for (const d of definitions) {
+    assert.equal(typeof d.run, "function")
+  }
+})
+
+test("代码装载：模块内自定义逻辑真实可执行（变量 + 方法）", async () => {
+  await writeWorkflow(
+    "code-logic.mjs",
+    `const slugify = (s) => String(s).trim().replaceAll(" ", "-").toLowerCase()
+     export default {
+       id: "code-logic", version: "1.0.0", stepNames: ["a"],
+       run: async (args) => ({ output: "slug:" + slugify(args.topic) }),
+     }`,
+  )
+  const { definitions, errors } = await loadCustomWorkflows([path.join(baseDir, "code-logic.mjs")], baseDir)
+  assert.deepEqual(errors, [])
+  const fakeCtx = { runId: "r", mode: "start", runSteps: async () => undefined } as never
+  const result = (await definitions[0]!.run({ topic: "Hello Custom Logic" }, fakeCtx)) as { output: string }
+  assert.equal(result.output, "slug:hello-custom-logic")
+})
+
+test("代码装载：坏形状逐一报错跳过（无导出/缺 id/缺 run/import 失败/reserved/与 JSON 重复）", async () => {
+  await writeWorkflow("code-empty.mjs", `export const nothing = 1`)
+  await writeWorkflow("code-no-id.mjs", `export default { version: "1.0.0", run: async () => {} }`)
+  await writeWorkflow("code-no-run.mjs", `export default { id: "code-no-run", version: "1.0.0" }`)
+  await writeWorkflow("code-broken.mjs", `export default { id: "code-broken" `)
+  await writeWorkflow(
+    "code-builtin.mjs",
+    `export default { id: "smoke", version: "9.9.9", run: async () => {} }`,
+  )
+  // 同 id@version 与已装载 JSON 冲突（目录混装场景）
+  await writeWorkflow("mix-a.json", { id: "mix-flow", steps: [{ name: "x", agent: "y" }] })
+  await writeWorkflow(
+    "mix-b.mjs",
+    `export default { id: "mix-flow", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
+  const dir = path.join(baseDir, "code-bad-dir")
+  await fs.mkdir(dir, { recursive: true })
+  const names = ["code-empty.mjs", "code-no-id.mjs", "code-no-run.mjs", "code-broken.mjs", "code-builtin.mjs", "mix-a.json", "mix-b.mjs"]
+  for (const n of names) {
+    await fs.rename(path.join(baseDir, n), path.join(dir, n))
+  }
+  const { definitions, errors } = await loadCustomWorkflows([dir], baseDir, ["smoke"])
+  assert.deepEqual(definitions.map((d) => d.id), ["mix-flow"]) // JSON 先到（排序 a.json < b.mjs）
+  const joined = errors.join("\n")
+  assert.match(joined, /code-empty\.mjs: module must export a workflow/)
+  assert.match(joined, /code-no-id\.mjs: workflow\.id must be a non-empty string/)
+  assert.match(joined, /code-no-run\.mjs: workflow\.run must be a function/)
+  assert.match(joined, /code-broken\.mjs: failed to import/)
+  assert.match(joined, /code-builtin\.mjs: id "smoke" is reserved/)
+  assert.match(joined, /mix-b\.mjs: duplicate mix-flow@1\.0\.0/)
+})
+
+test("代码装载：目录混装 json + 代码（排序装载），空目录报错文案覆盖四扩展名", async () => {
+  const dir = path.join(baseDir, "code-mix-dir")
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, "z-json.json"), JSON.stringify({ id: "z-json", steps: [{ name: "x", agent: "y" }] }))
+  await fs.writeFile(
+    path.join(dir, "a-code.mjs"),
+    `export default { id: "a-code", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
+  const { definitions, errors } = await loadCustomWorkflows([dir], baseDir)
+  assert.deepEqual(errors, [])
+  assert.deepEqual(definitions.map((d) => d.id), ["a-code", "z-json"])
+
+  const empty = path.join(baseDir, "code-empty-dir")
+  await fs.mkdir(empty)
+  const emptyResult = await loadCustomWorkflows([empty], baseDir)
+  assert.match(emptyResult.errors[0] ?? "", /no workflow files \(\.json\/\.js\/\.mjs\/\.cjs\)/)
+})

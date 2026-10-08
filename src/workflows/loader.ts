@@ -19,6 +19,7 @@
 import { existsSync, statSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 import type { WorkflowDefinition } from "../registry/definition.js"
 import type { AnyWorkflowDefinition } from "../registry/registry.js"
@@ -147,7 +148,14 @@ function checkAgentOptions(step: Record<string, unknown>, index: number): string
   return undefined
 }
 
-/** 解析入口路径列表为 .json 文件列表（目录 = 一层扫描；不存在的入口报错） */
+/** 代码流程模块扩展名（P2-14：flows 目录可放 JS 模块，恢复 v1 自定义逻辑能力） */
+const CODE_EXTENSIONS = [".js", ".mjs", ".cjs"] as const
+
+function isWorkflowFileName(name: string): boolean {
+  return name.endsWith(".json") || CODE_EXTENSIONS.some((ext) => name.endsWith(ext))
+}
+
+/** 解析入口路径列表为流程文件列表（目录 = 一层扫描；不存在的入口报错） */
 async function expandEntries(entries: string[], baseDir: string): Promise<{ files: string[]; errors: string[] }> {
   const files: string[] = []
   const errors: string[] = []
@@ -159,9 +167,9 @@ async function expandEntries(entries: string[], baseDir: string): Promise<{ file
     }
     const stat = statSync(resolved)
     if (stat.isDirectory()) {
-      const names = (await readdir(resolved)).filter((n) => n.endsWith(".json")).sort()
+      const names = (await readdir(resolved)).filter(isWorkflowFileName).sort()
       if (names.length === 0) {
-        errors.push(`${entry}: directory has no *.json workflow files`)
+        errors.push(`${entry}: directory has no workflow files (.json/.js/.mjs/.cjs)`)
         continue
       }
       files.push(...names.map((n) => path.join(resolved, n)))
@@ -519,7 +527,50 @@ export function toDefinition(dw: DeclarativeWorkflow): AnyWorkflowDefinition {
  * 装载入口：读取 + 校验 + 转换。文件级错误收集返回（调用方 warn+跳过），
  * 绝不因单个坏文件中断装载。reservedIds 命中即拒（避免遮蔽内置流程）。
  */
-export async function loadDeclarativeWorkflows(
+/**
+ * 装载代码流程模块（P2-14）：.js/.mjs/.cjs 动态 import，取
+ * default / definition / workflow 三种导出形态之一，校验
+ * WorkflowDefinition 最小形状（id/version 字符串 + run 函数）。
+ * 返回定义或错误文案（含文件名前缀）；不抛出。
+ */
+async function loadCodeWorkflowModule(
+  file: string,
+): Promise<{ ok: true; definition: WorkflowDefinition } | { ok: false; error: string }> {
+  const at = (msg: string) => `${path.basename(file)}: ${msg}`
+  let mod: unknown
+  try {
+    mod = await import(pathToFileURL(file).href)
+  } catch (error) {
+    return { ok: false, error: at(`failed to import (${error instanceof Error ? error.message : String(error)})`) }
+  }
+  if (typeof mod !== "object" || mod === null) {
+    return { ok: false, error: at("module must export a workflow (default export or named `definition`)") }
+  }
+  const candidate = (mod as Record<string, unknown>).default ?? (mod as Record<string, unknown>).definition ?? (mod as Record<string, unknown>).workflow
+  if (typeof candidate !== "object" || candidate === null) {
+    return {
+      ok: false,
+      error: at("module must export a workflow (default export or named `definition`): export defineWorkflow({...}) result"),
+    }
+  }
+  const def = candidate as { id?: unknown; version?: unknown; run?: unknown; description?: unknown }
+  if (typeof def.id !== "string" || def.id.length === 0) {
+    return { ok: false, error: at("workflow.id must be a non-empty string") }
+  }
+  if (typeof def.version !== "string" || def.version.length === 0) {
+    return { ok: false, error: at("workflow.version must be a non-empty string (semver; bump on structure change)") }
+  }
+  if (typeof def.run !== "function") {
+    return { ok: false, error: at("workflow.run must be a function: async run(args, ctx)") }
+  }
+  return { ok: true, definition: candidate as WorkflowDefinition }
+}
+
+/**
+ * 装载自定义流程（声明式 JSON + 代码式 JS 模块，P2-14 起统一入口）。
+ * 文件级错误 warn+跳过（与装载纪律一致：观测/装载不能成为主链路故障源）。
+ */
+export async function loadCustomWorkflows(
   entries: string[],
   baseDir: string,
   reservedIds: string[] = [],
@@ -529,6 +580,26 @@ export async function loadDeclarativeWorkflows(
   const reserved = new Set(reservedIds)
   const seenIds = new Map<string, string>()
   for (const file of files) {
+    if (CODE_EXTENSIONS.some((ext) => file.endsWith(ext))) {
+      const loaded = await loadCodeWorkflowModule(file)
+      if (!loaded.ok) {
+        errors.push(loaded.error)
+        continue
+      }
+      if (reserved.has(loaded.definition.id)) {
+        errors.push(`${path.basename(file)}: id "${loaded.definition.id}" is reserved by a built-in workflow`)
+        continue
+      }
+      const key = `${loaded.definition.id}@${loaded.definition.version}`
+      const seenIn = seenIds.get(key)
+      if (seenIn) {
+        errors.push(`${path.basename(file)}: duplicate ${key} (already loaded from ${seenIn})`)
+        continue
+      }
+      seenIds.set(key, path.basename(file))
+      definitions.push(loaded.definition)
+      continue
+    }
     let raw: unknown
     try {
       raw = JSON.parse(await readFile(file, "utf8"))
@@ -556,3 +627,6 @@ export async function loadDeclarativeWorkflows(
   }
   return { definitions, errors }
 }
+
+/** @deprecated 旧名（P2-14 起装载范围扩展到代码流程），等价 loadCustomWorkflows */
+export const loadDeclarativeWorkflows = loadCustomWorkflows

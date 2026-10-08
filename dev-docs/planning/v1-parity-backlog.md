@@ -163,6 +163,19 @@
     命令实跑全绿（install 断言条目+options+.bak+双 skills；uninstall 对称
     清理+用户数据保留）。v2 安装方式检测踩坑记录在案（node_modules 存在
     性不参与 project/locked 分类，残留单独成证据）。
+13. ~~**代码流程装载：自定义 JS 逻辑回归**（M，用户反馈 2026-10-08）~~ ✅
+    **已完成（2026-10-08，P2-14）**——v1 的 workflow 本体是 JS（变量/方法/
+    任意逻辑），v2 初版只开放声明式 JSON，自定义逻辑无处安放。补齐两件：
+    ① 包导出 `<pkg>/core`（defineWorkflow + 全组合子 + 质量门 + 谓词 +
+    并发原语，零 OpenCode 依赖的纯 Core 面）；② `options.workflows` 装载
+    扩展 `.js/.mjs/.cjs` 模块（动态 import，default/definition/workflow
+    三导出形态，最小形状校验 id/version/run；与 JSON 同目录混装、同规则
+    ——坏文件跳过告警/保留 id 拦截/同 id@version 去重；flowsDirs 推导同步
+    认四扩展名）。代码流程与声明式在 registry 完全同权（id@version 资产）：
+    journal/resume/metrics/面板回放一致，sessionIDs 同样贯通。journal
+    契约不变：编排步骤必须走 ctx.runSteps。测试 +4（363/363）+ 真机 E2E
+    （自定义 slugify/wordCount 方法 + runSteps journal 双步 completed +
+    sessionIDs 落盘）。边界如实：装载器不内嵌 TS 编译（TS 用户先 tsc）。
 11. ~~**verify 增强：lens 多视角 + threshold 投票**（S）~~ ✅ **已完成（2026-10-05，
     随 0.5.0 发布）**——`passThreshold`（(0,1] 投票阈值，缺省 1 = 全票/旧行为）
     + `lenses: [{ name, criteria }]`（多视角：一个视角一个评审员、各按专属
