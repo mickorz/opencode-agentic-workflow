@@ -28,7 +28,7 @@
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
   "bin": {
-    "opencode-agentic-workflow": "./dist/cli/index.js"
+    "opencode-agentic-workflow": "dist/cli/index.js"
   },
   "files": [
     "dist",

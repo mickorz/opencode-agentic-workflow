@@ -157,3 +157,83 @@ CI:  checkout@v6 → setup-node@v7(node24, registry-url, no cache)
 2. `gh run rerun 37733685262 --failed`（版本号/tag 都不动）
 3. 仍 404 且确认没碰过恢复码 → 删 TP 条目重建（npm 保存不校验，
    旧条目可能带不可见的坏状态；重建按字段清单逐项填）
+
+> ⚠️ 坑G 的处置计划（rerun 37733685262）已作废——见坑H 第 4 条。
+
+## 坑 H：三凶叠加定案 + 误诊链补完（v0.5.0 深挖，2026-10-08）
+
+外部分析提示 + 逐条核实（npm 官方文档 / GitHub Changelog / setup-node
+issue 实录 / run 37733685262 日志），定案如下。**此前坑G 留下的「表单
+不匹配 vs 冻结」二选一是个假二元——真凶在仓库侧就有一个，且日志里
+一直有证据没被读出来。**
+
+### H-1：setup-node 的 registry-url 占位行——npm 从未尝试过 OIDC（本源）
+
+- setup-node 只要配 `registry-url` 就向 `$RUNNER_TEMP/.npmrc` 写
+  `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` 占位行，
+  **v7 也没修**（v7 只移除了占位 NODE_AUTH_TOKEN 环境变量导出，
+  actions/setup-node#1551；lynxor/dfab87f 实测 v7 仍写该行）
+- 环境变量未设置 → npm 运行时把占位符展开为**空字符串** → npm 11
+  读到 `_authToken=` 即认定「已配置凭证」→ **跳过 OIDC 交换** →
+  空凭证直接 PUT → npmjs 对未认证写（存量 scoped 包）回 **E404**
+  （故意伪装成包不存在，防探测私有包存在性）
+- **日志铁证**（run 37733685262）：打包 → PSA notice → `Publishing to
+  registry.npmjs.org` → 275ms 后 E404，**全程无 provenance 签名、无
+  oidc 交换痕迹**。此前「OIDC 交换成功后 PUT 404」的记录是**误读**
+  （把 PSA/成功记忆脑补成了交换成功）——坑A 判别链第 2 条的判据
+  本来就能排除此案，没人去日志里数这几行
+- 顺带证伪坑B 的旧结论：当时「去掉 registry-url 没用」大概率是因为
+  同时存在别的凶（TP 表单 48h 过期，见 H-2）或改完没触发新 run——
+  **正确形态是：npmjs 发布段不配 registry-url（npmjs 是默认 registry）**
+- 修复：去掉 registry-url + publish 前防御性 sed 清 `_authToken` 行
+  （azu/setup-npm-trusted-publish 同款）；已提交 publish.yml
+
+### H-2：TP 配置 48h 过期规则（2026-10-02 生效）——表单怎么改都没用
+
+- npm 官方 + GitHub Changelog：**新建的 Trusted Publishing 配置必须在
+  48h 内完成一次成功发布**才算验证；过期后条目**仍显示在设置页但彻底
+  失效**；**普通编辑不重置窗口**，只能删除重建（重建重新计时 48h）
+- 本包 TP 条目创建于 10-03 前后、CI 零成功 → **条目早已过期**。
+  这解释了坑G 之后「表单字段看着全对」的僵局——看着对，但它是尸体
+- 另注意（官方文档）：2026-05-20 后新建的配置**必须显式勾选**至少一个
+  Allowed action（`npm publish` / `npm stage publish`）；npm 保存时
+  **不校验**配置与仓库身份的匹配，错了也存得进去
+- 处置（账号侧，只能本人做）：npmjs.com 删除旧 TP 条目 → 重建：
+  repo `mickorz/opencode-agentic-workflow`、workflow `publish.yml`、
+  Environment 留空、☑ npm publish（+ ☑ Allow npm dist-tag）→ **48h 内
+  推 tag 完成首次成功发布**。CLI 等价：`npm trust github
+  @mickorz/opencode-agentic-workflow --file publish.yml
+  --repo mickorz/opencode-agentic-workflow --allow-publish -y`
+
+### H-3（顺带凶）：bin 路径带 `./` 前缀 → npm 11 打包时整个删除
+
+- run 日志另一条被忽略的 warning：`bin[opencode-agentic-workflow]
+  script name ./dist/cli/index.js was invalid and removed`
+- npm 11 对 bin 值校验收紧：`"./dist/cli/index.js"` 的 `./` 前缀非法，
+  publish 时**不是修正而是整条删除**——0.5.0 即使发布成功也是**无 bin
+  的残包**（安装器 CLI 全废）。0.4.0 无 bin 字段所以此前从未暴露
+- 修复：`npm pkg fix` 规范为 `dist/cli/index.js`（已应用，dry-run 复验
+  无警告）。教训：**带 bin 的版本发布前必须 `npm publish --dry-run`
+  过一遍警告**，auto-correct 类 warning 一律当 blocker 处理
+
+### H-4：`gh run rerun` 不会使用 main 上的新 YAML
+
+- GitHub Actions 重跑用**原 commit 的工作流定义**——改完 publish.yml
+  后 rerun 旧 run 仍是旧行为（还会再踩 H-1）。坑G 的 rerun 计划作废
+- 正确触发：修复合入 main 后**推新 tag**。v0.5.0 未发布过 → 允许把
+  v0.5.0 tag 移到修复后的 commit（「永不重打已发布版本的 tag」红线
+  只约束已发布版本）重推触发；或直接升版
+- 判别补充：以后看失败 run 先 `grep -c "provenance\|oidc" 日志`——
+  零命中 = 根本没走 OIDC（先查 .npmrc/registry-url），有签名仍 404
+  才往表单/权限方向查
+
+### 汇总：为什么 4 次全败
+
+| 时间 | 主凶 |
+|---|---|
+| 10-03（0.3.1×3 / 0.3.2） | H-1 占位行（当时 v4/v6 + registry-url）+ 表单字段错（坑D） |
+| 10-04（0.4.0） | H-1 + 坑F 冻结（本地发布救场） |
+| 10-08（0.5.0） | H-1（v7 + registry-url 仍写占位行）+ H-2 条目已过期；若发布成功还会撞 H-3 |
+
+三凶独立存在、逐个都能单独挡死发布——单变量排查永远修不完。
+修复后首跑若仍 404：按坑G 判别要点区分（URL 形态 + 有无 oidc 痕迹）。

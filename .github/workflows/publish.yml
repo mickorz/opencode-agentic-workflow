@@ -1,10 +1,18 @@
 # 打 v* tag 自动发布到 npm（npm Trusted Publishing / OIDC，无长期 token）
 #
-# 一次性前置配置（npmjs.com 包页 Settings → Trusted Publisher）：
+# 一次性前置配置（npmjs.com 包页 Settings → Trusted publishing）：
 #   Organization or user: mickorz
 #   Repository: opencode-agentic-workflow
-#   Workflow filename: publish.yml
-#   注意：配置与实际运行身份不匹配时发布报 E404（即使包存在）
+#   Workflow filename: publish.yml（含扩展名，精确匹配）
+#   Environment: 留空
+#   Allowed actions: ☑ npm publish（2026-05-20 后新建的配置必须显式勾选！）
+#   ⚠️ 48h 规则（2026-10-02 生效）：新建的 TP 配置必须在 48h 内完成一次成功
+#   发布才算「已验证」；过期后仍显示在设置页但彻底失效，且普通编辑不重置
+#   窗口——只能删除重建（重建后重新计时）。配置与运行身份不匹配、或配置
+#   已过期时，发布同样报 E404（即使包存在）。
+#
+# ⚠️ 重跑旧 run 不会使用 main 上的新 YAML（GitHub Actions 重跑用原 commit
+#   的工作流定义）——改过本文件后必须推新 tag 触发，rerun 无效。
 #
 # ⚠️ 全新包的首次发布（bootstrap，只做一次）：
 #   npm Trusted Publishing 无法铸造包的第一个版本（npm/cli#8544）——
@@ -39,17 +47,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # ⚠️ 必须 setup-node@v7：v7 起才移除占位 NODE_AUTH_TOKEN=XXXXX-… 注入
-      # （actions/setup-node#1440）。低于 v7 时 npm 误以为已有凭证而跳过 OIDC
-      # trusted-publisher 交换 → E404/ENEEDAUTH。
-      # （注意：日志里的 npm notice "tokens that bypass 2FA..." 是普适 PSA，
-      # 成功的 OIDC 发布里同样出现——2026-10-04 对比 v0.3.2 成功运行证伪
-      # 了「该提示 = 走错路径」的旧判别法，勿再据此误诊。）
+      # OIDC 关键坑（坑H，2026-10-08 定案）：setup-node 只要配了 registry-url
+      # 就会往 $RUNNER_TEMP/.npmrc 写 //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      # 占位行（v7 也没修，actions/setup-node#1551）；npm 11 读到该行即认为
+      # 「已配置凭证」，跳过 OIDC 交换，带空 Bearer 直接 PUT → npmjs 对未认证
+      # 写返回 E404（伪装成包不存在）。
+      # 判别法：失败日志若无 provenance 签名 / oidc 交换痕迹、PUT 后 300ms 内
+      # 404，即此坑（v0.5.0 run 37733685262 日志实证：全程零 OIDC 痕迹）。
+      # 故此处不配 registry-url（npmjs 是 npm 默认 registry，无需配置）。
+      # （日志里的 npm notice "tokens that bypass 2FA..." 是普适 PSA，
+      # 与走没走 OIDC 无关，勿据此误诊。）
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false   # 防 npm 缓存投毒暴露 OIDC token（官方建议）
+
+      # 防御性清理（版本无关）：若占位 _authToken 行因上游回归/缓存残留出现，
+      # 删掉它让 npm 走 OIDC（azu/setup-npm-trusted-publish 的同款做法）
+      - name: 清理 .npmrc 占位 _authToken（保 OIDC 路径）
+        run: |
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ]; then
+            sed -i.bak '/_authToken/d' "$npmrc" && rm -f "$npmrc.bak"
+            echo "stripped _authToken from $npmrc"
+          fi
 
       - run: npm ci
 
