@@ -102,7 +102,10 @@ npm error 404 The requested resource '...@0.4.0' could not be found
 **所有** publish 打的迁移公告，**不是** classic-token 路径的标志（env 干净
 的 OIDC 成功发布里也会出现）。不要围绕它修。
 
-## 最终可用的发布流（已验证）
+## 最终可用的发布流（~~已验证~~ ⚠️ CI 段未验证，见坑G）
+
+> **2026-10-08 更正**：下方 CI OIDC 段实际从未成功过（0.3.2/0.4.0 均为
+> 本地发布，见坑G 考古）。本节保留仅为历史记录，勿据此假设 CI 可用。
 
 ```text
 本地: npm version patch && git push --follow-tags
@@ -117,3 +120,41 @@ CI:  checkout@v6 → setup-node@v7(node24, registry-url, no cache)
 - `npm view` dist-tags.latest = 0.3.2 ✓
 - registry 包内 `dist/quality/verify.js` 含 ReviewerProtocolError ×7（坑3修复随包发布）✓
 - `dist/workflows/feature-development.js` = v1.1.0 ✓
+
+## 坑 G：CI OIDC 零成功——「已验证」是本地发布伪装的（v0.5.0 复发案，2026-10-08）
+
+**症状**：v0.5.0 tag push → CI `npm publish` 第 4 次 PUT-404（同坑F 文案）。
+按坑F 处置等「72h 冻结」到期后照旧失败——冻结理论塌了。
+
+**考古证据**（`npm view … time --json` × `gh run list --workflow=publish.yml`）：
+
+- `gh run list --status=success` = **0 条**：CI OIDC 从未成功过
+- 0.3.2 上架 `19:01:22Z`，而 v0.3.2 的 CI run `19:02:33Z` 才启动（晚 71s）——
+  「表单修正后 rerun ✅ published 0.3.2」实为**本地 publish**，rerun 从未成功
+- 0.4.0 上架 `08:18:57Z`，CI run `07:55Z` 已失败（23 分钟前）——坑F 的
+  「冻结期内任何发布路径都可能被拒」直接被本地发布成功证伪：**当时就没有
+  冻结，是 TP 表单一直没修好**，0.4.0 同样走了本地
+- v0.5.0（10-08）与 v0.4.0（10-04）失败 run 环境逐项一致（node v24.21.0 /
+  npm 11.19.0 / setup-node@v7）——workflow 侧无漂移，坐实 registry 侧
+
+**判别要点**（坑F 判别链第 1 条仍成立且是关键）：
+
+- 报错 URL 是 `PUT https://registry.npmjs.org/@scope%2fpkg` → 换到的凭证
+  无发布权限（表单 Allowed actions / 冻结 / 条目字段错）
+- 坑F 的教训升级：**误诊的代价是三天**——「冻结」叙事让 v0.5.0 发布在
+  错误的假设上排队。排障时 `npm view time` 与 run 时间戳对账（上架时间
+  是否落在某个 run 的执行窗口内）应作为第一步，别信任何「已验证」旧文
+- 剩余两个不可从 CI 日志区分的候选（都需账号侧处理）：
+  1. TP 条目 `Allowed actions` 未含 `npm publish`（坑D 修复后被再次编辑
+     弄丢，或 npm 新 UI 重存时重置）
+  2. 恢复码再次使用 → 冻结真生效（只有账号本人知道）
+
+**处置**（0.5.0 卡在此，tag 不动）：
+
+1. npmjs.com 核对/重存 TP 表单（字段清单见 `planning/TODO.md`，
+   含 `Allowed actions: ☑ npm publish` 与 `Allow npm dist-tag`）
+2. `gh run rerun 37733685262 --failed`（版本号/tag 都不动）
+3. 仍 404 且确认没碰过恢复码 → 删 TP 条目重建（npm 保存不校验，
+   旧条目可能带不可见的坏状态；重建按字段清单逐项填）
+4. 等不了表单排障时兜底：本地 `npm publish`（publish.yml 头部路径，
+   前三个版本实际都是这么发的）
