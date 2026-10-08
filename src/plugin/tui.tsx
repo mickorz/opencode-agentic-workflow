@@ -179,6 +179,20 @@ function setupProgressPanel(ctx: TuiContext): () => void {
       // server 侧无 progress board（旧版本/注册失败）——面板维持空态
     })
 
+  // V1 对齐：新 run 进入 running 时自动打开面板（v1 opencode-dynamic-workflows
+  // 的默认行为）。每个 runId 只自动开一次——用户手动关掉后本 run 不再打扰；
+  // 宿主未暴露插件 options（2.0.22），未来支持 autoOpenPanel=false 时自动生效
+  const autoOpened = new Set<string>()
+  const maybeAutoOpenPanel = (snapshot: RunProgressSnapshot): void => {
+    const opts = (ctx as { options?: Record<string, unknown> }).options
+    if (opts?.autoOpenPanel === false) return
+    if (snapshot.status !== "running") return
+    if (autoOpened.has(snapshot.runId)) return
+    autoOpened.add(snapshot.runId)
+    // current() 只报「本插件」的活动面板：未开（或别家面板）才开我们的
+    if (!ctx.ui.panel.current()) ctx.ui.panel.open(PANEL_NAME)
+  }
+
   // 实时流：全量快照，无需对账
   const offEvent = ctx.data.on(PROGRESS_EVENT, (event) => {
     const snapshot = parseRunSnapshot(event.data)
@@ -188,6 +202,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
       const rest = prev.filter((r) => r.runId !== snapshot.runId)
       return [snapshot, ...rest].slice(0, 50)
     })
+    maybeAutoOpenPanel(snapshot)
     refreshDetail(snapshot)
   })
 

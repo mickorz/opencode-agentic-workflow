@@ -406,7 +406,9 @@ npm 包内附两个 agent skill（`skills/` 目录，随包分发），教主 ag
 
 ## TUI 进度面板
 
-在交互式 TUI 里输入 `/workflow`（或命令面板搜 "Workflow progress"）打开进度面板：
+新 run 启动时面板**自动打开**（对齐 v1 默认行为；每个 run 只自动开一次，
+手动关掉后本 run 不再打扰）。也可以随时手动开：输入 `/workflow`
+（或命令面板搜 "Workflow progress"）。
 近期 run 一览（含 journal 里的历史 run），最新 run 展开步骤树，状态实时刷新——
 journal 每次状态变更都会派发 `run.progress` 全量快照事件。
 
