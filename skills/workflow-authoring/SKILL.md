@@ -25,9 +25,11 @@ JS 模块 → 保存即用（未知 id 自动重扫注册）→ `workflow` 工�
 
 ## 第二步：写 JS 模块（flows 目录）
 
-位置：项目 `flows/` 目录（缺省自动装载，零配置）；或 `opencode.json` 插件
-options 里 `workflows: ["<路径>"]` 显式指定（文件或目录，相对项目根）。
-扩展名 `.mjs` 推荐（`.js`/`.cjs` 也支持；引用核心 API 的 `.cjs` 会明确报错）。
+**动笔要快**：位置就是项目根下 `flows/`（缺省自动装载），或
+`opencode.json` 插件 options 里 `workflows: ["<路径>"]` 显式指定的位置——
+**不需要探测插件装在哪、npm 全局有什么**（探索超过两步还没开始写文件，
+路线就错了）。扩展名 `.mjs` 推荐（`.js`/`.cjs` 也支持；引用核心 API 的
+`.cjs` 会明确报错）。
 
 ```js
 // flows/release-notes.mjs
@@ -91,7 +93,17 @@ export default defineWorkflow({
 3. 改动已注册流程的步骤结构（stepNames 数量/顺序/语义）= **必须升
    version**（1.0.0 → 1.1.0）；旧 journal 的 resume 依赖精确版本解析
 4. `id` 不得用内置名：smoke / reliable / artifact / feature-development
-5. 模块只能用 ESM 语法导出（`export default` 或 `export const definition`）
+5. 模块只能用 ESM 语法导出（`export default` 或 `export const definition`）；
+   `.mjs` 里**不能有 TypeScript 注解**
+6. **模块顶层只放 import / 常量 / 函数 / 导出**——不要在顶层跑数据处理
+   （建索引、初始化表等）。顶层的立即执行代码在文件后部常量初始化之前
+   运行会触发 TDZ 报错（`Cannot access 'X' before initialization`）；
+   索引/缓存一律放函数里惰性构建
+7. **不要探索插件安装位置 / npm 全局目录**——flows 模块运行在插件进程
+   内：Node 内置模块（node:fs 等）可用，**用户目录与全局的 npm 包
+   require/import 不到**（解析链上没有）。本地确定性计算需要数据
+   （拼音表/映射表/词表）时，**把数据直接内嵌进 .mjs 文件**（大表放
+   文件底部，配惰性索引）；库能力做不到的部分交给 `agent` 步
 
 ## 第三步：即时试跑（无需重启）
 
@@ -133,7 +145,8 @@ export default defineWorkflow({
 
 | 报错 | 原因与修法 |
 |------|-----------|
-| `failed to import (...Cannot find package...)` | 模块导入了用户目录解析不到的包；只用 `@mickorz/opencode-agentic-workflow/core` 与 Node 内置模块 |
+| `failed to import (...Cannot find package...)` | 模块导入了用户目录解析不到的包；只用 `@mickorz/opencode-agentic-workflow/core` 与 Node 内置模块，数据需求内嵌文件 |
+| `Cannot access 'X' before initialization` | 顶层立即执行代码跑在文件后部常量之前（TDZ）——索引/初始化移进函数惰性构建 |
 | `imports ".../core" but .cjs cannot be specifier-rewritten` | `.cjs` 引用核心 API——改名 `.mjs` |
 | `module must export a workflow` | 缺 `export default defineWorkflow({...})` |
 | `workflow.run must be a function` | 定义缺 `async run(args, ctx)` |
