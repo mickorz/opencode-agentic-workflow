@@ -276,9 +276,18 @@ test("service runNow：manual 触发不消费游标；终态回写", async () =>
   assert.equal(record.trigger, "manual")
   assert.equal(record.status, "running")
   assert.equal(record.workflowRunId, "run-1")
-  // 落定 success -> 记录回写
+  // 落定 success -> 记录回写（轮询等待终态：CI 慢机上固定 5ms 睡眠是
+  // 竞态，曾两度炸掉 0.8.1/0.8.2 发布流水线——'running' vs 'success'）
   h.fired[0]!.resolve("success")
-  await new Promise((r) => setTimeout(r, 5))
+  const deadline = Date.now() + 2_000
+  for (;;) {
+    const rows = await listRuns(dir, "a")
+    if (rows[0]?.status === "success") break
+    if (Date.now() > deadline) {
+      assert.fail(`runNow 终态回写超时：status=${rows[0]?.status ?? "无记录"}`)
+    }
+    await new Promise((r) => setTimeout(r, 10))
+  }
   const runs = await listRuns(dir, "a")
   assert.equal(runs[0]?.status, "success")
   assert.ok(runs[0]?.finishedAt)
