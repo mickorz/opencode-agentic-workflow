@@ -22,7 +22,7 @@
 
 import { Plugin } from "@opencode/plugin"
 import path from "node:path"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 
 import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
@@ -48,7 +48,7 @@ import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
 import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
-import { refreshCustomWorkflows, type RefreshResult } from "./custom-flows.js"
+import { refreshCustomWorkflows, formatUnknownFlowMessage, type RefreshResult } from "./custom-flows.js"
 import { GitWorktreeProvider, InPlaceWorkspaceProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
@@ -61,6 +61,20 @@ import { bindProgressBoard } from "./progress-board.js"
 import type { SessionReplayMessage } from "./progress-rpc.js"
 import { buildCheckpointGate, parseCheckpointModeOverride } from "./checkpoint-override.js"
 import { isInsideRunSession } from "./run-sessions.js"
+
+/**
+ * 本插件版本（诊断用，best-effort）：dist/plugin 与 src/plugin 同为
+ * ../../package.json。进程冻结排查的关键信号——报错里带的 v 与安装版本
+ * 不符 = 宿主进程是老的（新开聊天不重载插件）。
+ */
+let pluginVersion = "unknown"
+try {
+  pluginVersion =
+    JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version ??
+    "unknown"
+} catch {
+  // 布局异常时保持 unknown：只影响诊断文案，不影响功能
+}
 
 export default Plugin.define({
   id: "agentic-workflow",
@@ -486,20 +500,16 @@ export default Plugin.define({
           if (!resuming && workflowEntries.length > 0 && registry.get(workflowId) === undefined) {
             const refreshed = await rescanCustomWorkflows()
             if (refreshed && registry.get(workflowId) === undefined) {
-              // 重扫后仍未命中：报可用清单；flows 有装载错误时附前几条
-              //（文件写了但没注册上的主要原因：语法/形状/保留 id/解析失败）
-              const errorHint =
-                refreshed.errors.length > 0
-                  ? "\nflows load errors (first 3):\n" +
-                    refreshed.errors
-                      .slice(0, 3)
-                      .map((error) => `- ${error}`)
-                      .join("\n")
-                  : ""
+              // 重扫后仍未命中：报可用清单 + 装载错误 + 插件版本/重启提示
+              //（v0.6.4：版本是「进程冻结」的自诊断信号——新开聊天不重载
+              // 插件，skill 却会重读，极易误判为已升级）
               return {
-                output:
-                  `[agentic-workflow] workflow failed: workflow not found: ${workflowId}. ` +
-                  `available: ${registry.ids().join(", ")}${errorHint}`,
+                output: formatUnknownFlowMessage({
+                  workflowId,
+                  availableIds: registry.ids(),
+                  errors: refreshed.errors,
+                  pluginVersion,
+                }),
               }
             }
           }

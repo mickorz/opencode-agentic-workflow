@@ -12,7 +12,7 @@ import path from "node:path"
 import { test } from "node:test"
 
 import { WorkflowRegistry } from "../../src/registry/registry.js"
-import { refreshCustomWorkflows } from "../../src/plugin/custom-flows.js"
+import { refreshCustomWorkflows, formatUnknownFlowMessage } from "../../src/plugin/custom-flows.js"
 
 let baseDir: string
 let flowsDir: string
@@ -103,4 +103,30 @@ test("空入口：no-op 返回空结果", async () => {
   })
   assert.deepEqual(result.registered, [])
   assert.deepEqual(result.errors, [])
+})
+
+test("未知 id 报错文案：带插件版本 + 进程冻结重启提示（v0.6.4）", () => {
+  const message = formatUnknownFlowMessage({
+    workflowId: "wordfreq-mnemonic",
+    availableIds: ["smoke", "calc"],
+    pluginVersion: "0.6.3",
+  })
+  assert.match(message, /workflow not found: wordfreq-mnemonic/)
+  assert.match(message, /available: smoke, calc/)
+  assert.match(message, /plugin v0\.6\.3/)
+  assert.match(message, /a new chat does not reload plugins/)
+  // 无错误时不出现 load errors 段
+  assert.doesNotMatch(message, /flows load errors/)
+})
+
+test("未知 id 报错文案：装载错误只附前 3 条", () => {
+  const message = formatUnknownFlowMessage({
+    workflowId: "x",
+    availableIds: ["smoke"],
+    errors: ["e1", "e2", "e3", "e4", "e5"],
+    pluginVersion: "unknown",
+  })
+  assert.match(message, /- e1\n- e2\n- e3/)
+  assert.doesNotMatch(message, /- e4/)
+  assert.match(message, /plugin vunknown/)
 })

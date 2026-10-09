@@ -32,6 +32,41 @@ export interface RefreshResult {
   errors: string[]
 }
 
+/**
+ * workflow 工具「未知 flow id」的报错文案（v0.6.4）。
+ *
+ * 三段信息：
+ *  1. 可用 id 清单（live registry）
+ *  2. flows 装载错误前 3 条（文件写了但没注册上的自诊断）
+ *  3. 插件版本 + 重启提示——**进程冻结的显式信号**：插件随 opencode
+ *     进程加载一次，新开聊天不重载（skill 却会重读磁盘，极易误判已
+ *     升级）。报错里的 v 与安装版本不符 = 宿主进程是老的，完全重启
+ *     opencode 才会换血。
+ */
+export function formatUnknownFlowMessage(params: {
+  workflowId: string
+  availableIds: readonly string[]
+  errors?: readonly string[]
+  pluginVersion: string
+}): string {
+  const { workflowId, availableIds, errors = [], pluginVersion } = params
+  const errorHint =
+    errors.length > 0
+      ? "\nflows load errors (first 3):\n" +
+        errors
+          .slice(0, 3)
+          .map((error) => `- ${error}`)
+          .join("\n")
+      : ""
+  return (
+    `[agentic-workflow] workflow failed: workflow not found: ${workflowId}. ` +
+    `available: ${availableIds.join(", ")}${errorHint}` +
+    `\n[plugin v${pluginVersion}; plugins load once per opencode process - ` +
+    `if the flow file was added after this process started or v looks outdated, ` +
+    `fully restart opencode (a new chat does not reload plugins)]`
+  )
+}
+
 export async function refreshCustomWorkflows(params: {
   registry: WorkflowRegistry
   /** flows 入口（文件或目录；相对 baseDir） */
