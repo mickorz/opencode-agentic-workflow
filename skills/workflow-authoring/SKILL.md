@@ -172,17 +172,32 @@ return { info, results }
 ```
 
 可用全局（19 个，v1 全集）：`agent(prompt, {label, timeoutMs, retries,
-schema, model})`（返回字符串；schema 时返回解析对象）、`parallel` /
-`pipeline` / `sequence` / `fallback` / `race`、`check(cond, msg)`、
-`fileExists(p)`（同步）/ `commandSuccess(cmd)`、`phase` / `log` / `args` /
-`setConcurrency` / `verify` / `judgePanel` / `retry` / `checkpoint(msg,
-{label, default})`（返回 boolean）/ `workflow(id, args)`（子流程，需
-journalDir）/ `console`。
+retryDelayMs, schema, model, isolation, agentType, tier})`（返回字符串；
+schema 时返回解析对象）、`parallel` / `pipeline` / `sequence` / `fallback` /
+`race`、`check(cond, msg)`、`fileExists(p)`（同步）/ `commandSuccess(cmd)`、
+`phase` / `log` / `args` / `setConcurrency` / `verify` / `judgePanel` /
+`retry` / `checkpoint(msg, {label, default})`（返回 boolean）/
+`workflow(ref, args)`（子流程，ref 三形态：注册名 / 脚本路径
+`'./x.js'` / 对象 `{scriptPath, label}`；返回子流返回值本体——对象可直取
+字段）/ `console`。
+
+**失败语义（v1 对位）**：v1 默认**一切未知错误可恢复**（AGENT_FAILED）——
+parallel/pipeline 塌缩 `null`、sequence 停止返 `null`、fallback/race 换
+候选；顶层 `agent()` 失败（超时/schema 耗尽等）也塌缩 `null` 继续跑
+（登记「阶段失败闸门」——下一 `phase()` 边界或 run 终检触发终止报告；
+fallback/race 成功吸收清空闸门）。只有适配层契约错误与 abort 是结构性
+（立即上抛，不塌缩）。
+
+**agent 选项**：`isolation: 'worktree'` per-call 独立 worktree（结束自动
+拆除，非 git 目录响亮降级共享目录）；`agentType` / `tier` 响亮警告后降级
+（v2 无调用级对位）；未知选项键 fail-loud。
 
 与 v1 的已知差异（fail-loud，不静默）：
 - `setConcurrency(n)`：v2 并发由 executor 统一管理——警告后忽略
 - `phase()` 只进日志与事件（v2 TUI 无阶段分组；步骤行 = 叶子调用）
 - resume = 整体重跑（v1 脚本无静态步骤序，无前缀跳过）
+- **chain 式工具嵌套**（子 agent 调 workflow 工具的 scriptPath）不被
+  支持——v2 工具拒绝 run 内调用（防信号量自饿死）；嵌套用 `workflow()`
 - meta.name（snake_case）即 flow id；固定 version 1.0.0
 - 脚本内不能有 static `import` / 除 meta 外的 `export`（装载期明确报错）
 
