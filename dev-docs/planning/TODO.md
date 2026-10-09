@@ -11,8 +11,12 @@
 3. **小事**：testworkflow 的 `keyword-report.mjs` 汇总行 `undefined` 变量引用
    bug（用户测试流脚本问题，非插件；用户说修再修）
 
-> 前置：0.7.0 面板未自动打开问题排查中（缓存已核实解析 0.7.0@13:46，
-> 疑 TUI 插件运行时），修完再开批次 C。
+> 前置 ✅ 已解决（0.7.1，2026-10-09）：「重启后面板没默认打开」根因是宿主
+> 2.0.26 的会话作用域 slot（主页零挂载），非插件故障。已补 `home.footer.status`
+> 主页常驻行并 PTY 无头验证。坑与证据：
+> `dev-docs/experience/宿主2.0.26会话作用域slot-主页无挂载点.md`。
+> **批次 C 设计修正**：全屏视图走 `ui.router` 全局路由（session.panel
+> fullscreen 是会话作用域，主页进不去）。
 
 ## 你侧操作项（Owner: Michael）
 
