@@ -344,7 +344,7 @@ workflow 结束时同步写 `metrics.json` 快照（失败也写）。
 
 | 参数 | 说明 |
 |------|------|
-| `flow` | workflow id（见工具描述内清单；缺省 `smoke`；未知 id 报错并列出可用清单） |
+| `flow` | workflow id（见工具描述内清单；缺省 `smoke`）。**未知 id 会先触发一次 flows 目录增量重扫**——会话中途写好的 `.mjs` 无需重启即可运行；仍未知才报错并列出可用清单（附 flows 装载错误前几条） |
 | `topic` | 主题参数（恒传顶层） |
 | `args` | flow 声明的其余参数（对象；描述内 `[args: …]` 有提示；required/类型不符即报具体问题） |
 | `resumeRunId` | 恢复指定 run（优先于 flow/topic；用失败输出里的 runId；aborted 的 run 也可恢复） |
@@ -582,6 +582,10 @@ export default defineWorkflow({
   `"<pkg>/core"` 重写为插件自身 dist 的绝对路径再导入，拿到与宿主同一
   模块实例（executor 已接线）。**用户无需 npm 安装本包**；模块里其余
   相对导入照常解析。`.cjs` 引用核心 API 会得到「改名 .mjs」的明确报错
+- **保存即用（v0.6.1）**：`workflow` 工具遇到未知 flow id 会先增量重扫
+  flows 目录——会话中途写好的新 `.mjs` 文件当场注册运行，无需重启
+  （v1「定义即注册」体验对位）。边界如实：只有**新文件**能被拾取，
+  **改动已装载文件**（含升 version）需重启（Node ESM 缓存按路径）
 - **registry 完全同权**：内置与自定义都是 `id@version` 资产——journal /
   resume / 版本解析 / metrics / 面板详情与 Open Session 回放全部一致
   （代码流程的 sessionIDs 同样落盘）

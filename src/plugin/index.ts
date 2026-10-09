@@ -48,7 +48,7 @@ import { reliableWorkflow } from "../workflows/reliable.js"
 import { smokeWorkflow } from "../workflows/smoke.js"
 import { artifactWorkflow } from "../workflows/artifact.js"
 import { featureDevelopmentWorkflow } from "../workflows/feature-development.js"
-import { loadCustomWorkflows } from "../workflows/loader.js"
+import { refreshCustomWorkflows, type RefreshResult } from "./custom-flows.js"
 import { GitWorktreeProvider, InPlaceWorkspaceProvider, type WorkspaceProvider, type CleanupPolicy } from "../workspace/index.js"
 import {
   InteractiveCheckpointGate,
@@ -209,7 +209,9 @@ export default Plugin.define({
     // 自定义 workflow（代码式 JS 模块）：options.workflows 路径（.js/.mjs/.cjs
     // 文件或目录，相对项目目录）；未配置时缺省探测项目 flows/ 目录（存在即装载，
     // 零配置开箱）。文件级错误 warn+跳过（观测/装载不能成为主链路故障源）；
-    // 必须在工具注册前完成（流程清单进工具描述）
+    // 必须在工具注册前完成（流程清单进工具描述）。
+    // v0.6.1：装载注册抽到 custom-flows.ts——init 全量 + 运行期未知 id 增量
+    // 重扫共用同一语义
     const builtinIds = ["smoke", "reliable", "artifact", "feature-development"]
     const projectDir = ctx.location.directory
     const workflowEntries =
@@ -219,36 +221,48 @@ export default Plugin.define({
           ? ["flows"]
           : []
     if (workflowEntries.length > 0) {
-      const loaded = await loadCustomWorkflows(
-        workflowEntries,
-        projectDir,
-        builtinIds,
-      )
-      for (const error of loaded.errors) {
+      const initial = await refreshCustomWorkflows({
+        registry,
+        entries: workflowEntries,
+        baseDir: projectDir,
+        reservedIds: builtinIds,
+      })
+      for (const error of initial.errors) {
         console.log(`[agentic-workflow] custom workflow file skipped: ${error}`)
       }
-      let registered = 0
-      for (const definition of loaded.definitions) {
-        try {
-          registry.register(definition)
-          registered += 1
-          console.log(
-            `[agentic-workflow] custom workflow registered: ${definition.id}@${definition.version} ` +
-              `(${(definition.stepNames ?? []).join(" -> ")})`,
-          )
-        } catch (error) {
-          console.log(
-            `[agentic-workflow] custom workflow rejected ${definition.id}@${definition.version}: ` +
-              `${error instanceof Error ? error.message : String(error)}`,
-          )
-        }
+      for (const { id, version, stepNames } of initial.registered) {
+        console.log(
+          `[agentic-workflow] custom workflow registered: ${id}@${version} ` +
+            `(${stepNames.join(" -> ")})`,
+        )
       }
-      if (registered === 0 && loaded.errors.length > 0) {
+      if (initial.registered.length === 0 && initial.errors.length > 0) {
         console.log(
           "[agentic-workflow] note: no custom workflows were registered; " +
             "built-in workflows remain fully available",
         )
       }
+    }
+
+    /** 运行期增量重扫（v0.6.1）：未知 id 时拾取新写的 flows 文件，无需重启 */
+    const rescanCustomWorkflows = async (): Promise<RefreshResult | undefined> => {
+      if (workflowEntries.length === 0) return undefined
+      const refreshed = await refreshCustomWorkflows({
+        registry,
+        entries: workflowEntries,
+        baseDir: projectDir,
+        reservedIds: builtinIds,
+      })
+      for (const error of refreshed.errors) {
+        console.log(`[agentic-workflow] custom workflow file skipped: ${error}`)
+      }
+      for (const { id, version, stepNames } of refreshed.registered) {
+        console.log(
+          `[agentic-workflow] custom workflow registered: ${id}@${version} ` +
+            `(${stepNames.join(" -> ")})`,
+        )
+      }
+      return refreshed
     }
 
     // P2.5 durable journal：配置 journalDir 后，run 经 startWorkflow/resumeWorkflow
@@ -376,7 +390,9 @@ export default Plugin.define({
               type: "string",
               description:
                 "Workflow id from the Available workflows list above (default " +
-                "smoke). Unknown ids " +
+                "smoke). An unknown id triggers ONE rescan of the flows " +
+                "directory before failing - a workflow .mjs written after " +
+                "startup becomes runnable WITHOUT restart. Still-unknown ids " +
                 "fail with the list of available ids",
             },
             resumeRunId: {
@@ -461,6 +477,32 @@ export default Plugin.define({
           // P0-1：args 透传——topic 恒在顶层，其余 flow 声明参数经 args 对象
           // 合并转发（引擎按 argsSchema 校验，required/类型不符即报具体问题）
           const workflowArgs = buildWorkflowArgs(parsed.topic, parsed.args)
+
+          // v0.6.1 即时可用：未知 id 先增量重扫一次 flows（刚写好的 .mjs 无需
+          // 重启）。resume 不触发（flow 由 journal 精确解析）；已知 id 不触发
+          //（不会隐式热替换已注册版本——改文件升 version 走重启，见 skill）
+          const resuming =
+            typeof parsed.resumeRunId === "string" && parsed.resumeRunId.length > 0
+          if (!resuming && workflowEntries.length > 0 && registry.get(workflowId) === undefined) {
+            const refreshed = await rescanCustomWorkflows()
+            if (refreshed && registry.get(workflowId) === undefined) {
+              // 重扫后仍未命中：报可用清单；flows 有装载错误时附前几条
+              //（文件写了但没注册上的主要原因：语法/形状/保留 id/解析失败）
+              const errorHint =
+                refreshed.errors.length > 0
+                  ? "\nflows load errors (first 3):\n" +
+                    refreshed.errors
+                      .slice(0, 3)
+                      .map((error) => `- ${error}`)
+                      .join("\n")
+                  : ""
+              return {
+                output:
+                  `[agentic-workflow] workflow failed: workflow not found: ${workflowId}. ` +
+                  `available: ${registry.ids().join(", ")}${errorHint}`,
+              }
+            }
+          }
 
           // P1-3 后台分支：depth/gate 生命周期移交给 completion（外层 try/finally
           // 的立即恢复会提前放锁）。要求 journalDir；resume 一律走阻塞路径。

@@ -10,7 +10,7 @@ description: >
 # workflow-authoring（代码流程编写）
 
 把用户的流程需求变成可复用的代码 workflow：**对话澄清 → 写 flows 目录
-JS 模块 → 装载注册 → `workflow` 工具试跑**。
+JS 模块 → 保存即用（未知 id 自动重扫注册）→ `workflow` 工具试跑**。
 
 > v0.6.0 起声明式 JSON 流程已移除（`workflow_define` 工具同步下线），
 > 自定义流程只有代码形态。历史 JSON 用 `@mickorz/opencode-agentic-workflow/core`
@@ -93,17 +93,18 @@ export default defineWorkflow({
 4. `id` 不得用内置名：smoke / reliable / artifact / feature-development
 5. 模块只能用 ESM 语法导出（`export default` 或 `export const definition`）
 
-## 第三步：装载注册
+## 第三步：即时试跑（无需重启）
 
-保存文件后**重启 opencode**（装载发生在插件初始化）。验证：
+保存文件后**直接调用 `workflow` 工具**——未知 flow id 会触发一次 flows
+目录增量重扫，刚写的模块当场注册运行（v0.6.1 起；v1「定义即注册」的
+代码形态对位）：
 
-- 启动日志（或 `~/.local/share/opencode/log/opencode.log`）出现
-  `custom workflow registered: <id>@<version>`
-- 报错行 `custom workflow file skipped: <文件>: <原因>` 逐一指名——按报错
-  修文件再重启
-
-同 id@version 重复定义：目录内多文件冲突会跳过后者并告警；改结构必须升
-version。
+- 成功：工具正常执行，输出带 `[<id>@<version> runId=…]`
+- `workflow not found` 且附 `flows load errors` 清单：文件写了但没注册
+  上——按指名的错误修文件再试
+- **边界（如实）**：只有**新文件**能被重扫拾取；**改动已装载文件**
+  （含升 version）需重启生效（Node ESM 缓存按路径，重导返回旧模块）。
+  编辑既有流程后用 resumeRunId 前先重启
 
 ## 第四步：试跑验证
 
@@ -137,6 +138,8 @@ version。
 | `module must export a workflow` | 缺 `export default defineWorkflow({...})` |
 | `workflow.run must be a function` | 定义缺 `async run(args, ctx)` |
 | `JSON workflows were removed in v0.6.0` | flows 目录里还有 .json——按上面映射表改写成 JS |
+| `workflow not found` + `flows load errors` 清单 | 文件没注册上：按指名错误修文件（语法/形状/保留 id/解析失败）直接重试，无需重启 |
+| 改了已注册流程但不生效 | 已装载文件的修改（含升 version）需重启；新文件才能被重扫即时拾取 |
 | `id "..." is reserved by a built-in` | 换个 id |
 | `duplicate <id>@<version>` | 同版本已从别的文件装载——删一处或升 version |
 | verify 返回 `passed: false` | 评审语义否决——改产物质量或放宽 criteria，不是 bug |
