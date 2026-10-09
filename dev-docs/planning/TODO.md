@@ -1,5 +1,19 @@
 # TODO
 
+## Agent 侧待办（已确认要做，暂缓——2026-10-09 用户指示「先保存，后面再做」）
+
+1. **批次 C（目标 0.8.0）**：全屏工作流视图 + j/k/Enter/Esc 键盘导航 +
+   节点 Inspector（v1 nodeview 本体；detail RPC 数据已够用）。
+   清单：`dev-docs/research/v1-v2-TUI显示功能对比与补齐清单.md` §5
+2. **批次 D（目标 0.9.0）**：journal 记 prompt 摘要 / attempt / timeout 上限，
+   Inspector 信息补全（重试进度 `(2/3)`、超时 `10s/1m`、缓存回放标记）。
+   动持久化格式，需旧 journal 兼容
+3. **小事**：testworkflow 的 `keyword-report.mjs` 汇总行 `undefined` 变量引用
+   bug（用户测试流脚本问题，非插件；用户说修再修）
+
+> 前置：0.7.0 面板未自动打开问题排查中（缓存已核实解析 0.7.0@13:46，
+> 疑 TUI 插件运行时），修完再开批次 C。
+
 ## 你侧操作项（Owner: Michael）
 
 ### ~~【BLOCKING v0.5.0】npmjs TP 条目删除重建 + 推新 tag~~ ✅ **已解决（2026-10-08 08:57Z，0.5.0 上架）**
