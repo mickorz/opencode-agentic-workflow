@@ -3,8 +3,9 @@ name: workflow-authoring
 description: >
   编写与自定义 opencode-agentic-workflow 代码流程（JS 模块）时加载。当用户想
   定义/创建一个 workflow、把某个重复流程自动化、给现有流程加步骤或参数、
-  或遇到流程装载报错与版本冲突时使用。覆盖：需求澄清、flows 目录 JS 模块
-  编写、装载注册、workflow 工具试跑验证的完整链路。
+  放入 v1（opencode-dynamic-workflows）时代的 .js 脚本、或遇到流程装载报错
+  与版本冲突时使用。覆盖：需求澄清、flows 目录 JS 模块编写（含 v1 脚本
+  legacy 直接装载）、装载注册、workflow 工具试跑验证的完整链路。
 ---
 
 # workflow-authoring（代码流程编写）
@@ -28,7 +29,8 @@ JS 模块 → 保存即用（未知 id 自动重扫注册）→ 自己调 `workf
 
 > v0.6.0 起声明式 JSON 流程已移除（`workflow_define` 工具同步下线），
 > 自定义流程只有代码形态。历史 JSON 用 `@mickorz/opencode-agentic-workflow/core`
-> API 改写（文末有映射表）。
+> API 改写（文末有映射表）。**v0.8.0 起 v1 脚本（魔法全局 + 顶层 return）
+> 原生装载，不改写**（见「v1 脚本（legacy）直接装载」节）。
 
 ## 第一步：澄清需求（缺什么问什么，别猜）
 
@@ -147,6 +149,47 @@ checkpointMode=auto-approve`（headless 必传）。关注：
 以后想用，直接说：「用拼音口诀流程，词：xxx」
 ```
 
+## v1 脚本（legacy）直接装载
+
+**用户给了 opencode-dynamic-workflows（v1）时代的 .js 脚本？原样放进
+flows/ 目录即可，绝不改写。** 识别条件：文件含 `export const meta = {...}`
+且不含 `defineWorkflow`。装载后与 v2 流程同权（同一 workflow 工具调用、
+journal、TUI 面板、metrics）。
+
+```js
+// flows/smoke-test.js —— v1 脚本原样
+export const meta = { name: 'smoke_test', description: '最小冒烟' }
+
+phase('Scan')
+const info = await agent('列出当前目录下的文件')
+
+phase('Echo')
+const results = await parallel([
+  () => agent('说明工作流编排'),
+  () => agent('说明确定性重放'),
+])
+return { info, results }
+```
+
+可用全局（19 个，v1 全集）：`agent(prompt, {label, timeoutMs, retries,
+schema, model})`（返回字符串；schema 时返回解析对象）、`parallel` /
+`pipeline` / `sequence` / `fallback` / `race`、`check(cond, msg)`、
+`fileExists(p)`（同步）/ `commandSuccess(cmd)`、`phase` / `log` / `args` /
+`setConcurrency` / `verify` / `judgePanel` / `retry` / `checkpoint(msg,
+{label, default})`（返回 boolean）/ `workflow(id, args)`（子流程，需
+journalDir）/ `console`。
+
+与 v1 的已知差异（fail-loud，不静默）：
+- `setConcurrency(n)`：v2 并发由 executor 统一管理——警告后忽略
+- `phase()` 只进日志与事件（v2 TUI 无阶段分组；步骤行 = 叶子调用）
+- resume = 整体重跑（v1 脚本无静态步骤序，无前缀跳过）
+- meta.name（snake_case）即 flow id；固定 version 1.0.0
+- 脚本内不能有 static `import` / 除 meta 外的 `export`（装载期明确报错）
+
+**选型**：新流程默认写 v2 `.mjs`（类型清晰、argsSchema 进工具 hint、
+resume 支持步骤跳过）；v1 脚本直接放进来跑，或用户明确要 v1 风格时才写
+v1 形态。
+
 ## JSON → JS 迁移映射
 
 | 旧 JSON 步骤 | 代码写法 |
@@ -169,6 +212,9 @@ checkpointMode=auto-approve`（headless 必传）。关注：
 | `module must export a workflow` | 缺 `export default defineWorkflow({...})` |
 | `workflow.run must be a function` | 定义缺 `async run(args, ctx)` |
 | `JSON workflows were removed in v0.6.0` | flows 目录里还有 .json——按上面映射表改写成 JS |
+| `legacy script ... cannot use static import` | v1 脚本里写了 import——全局是注入的；需要导入就转 v2 .mjs |
+| `legacy scripts may only contain export const meta` | v1 脚本多余的 export——去掉或转 v2 .mjs |
+| `meta.name must be a non-empty snake_case string` | v1 meta.name 形状不对（如含 `-`）——改成 snake_case |
 | `workflow not found` + `flows load errors` 清单 | 文件没注册上：按指名错误修文件（语法/形状/保留 id/解析失败）直接重试，无需重启 |
 | 改了已注册流程但不生效 | 已装载文件的修改（含升 version）需重启；新文件才能被重扫即时拾取 |
 | `id "..." is reserved by a built-in` | 换个 id |

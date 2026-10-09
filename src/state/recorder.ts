@@ -232,6 +232,28 @@ export class RunJournal {
     emitEvent({ type: "run.progress", run: toProgressSnapshot(this.run) })
   }
 
+  /**
+   * v0.8.0 legacy 脚本适配：动态追加步骤并直接置 running。
+   * v1 脚本无静态步骤序（stepNames 缺省 → 预分配 0 步），叶子调用
+   * （agent/checkpoint/subflow）在发生时经此追加——与 v1 树可见节点同粒度。
+   * 返回新步骤下标（调用方随后 stepCompleted/stepFailed 收口）。
+   */
+  async appendStep(name: string | undefined, input?: unknown): Promise<number> {
+    this.assertOpen()
+    const index = this.run.steps.length
+    this.run.steps.push({
+      index,
+      ...(name !== undefined ? { name } : {}),
+      status: "running",
+      input,
+      startedAt: Date.now(),
+    })
+    this.run.currentStep = index
+    await this.store.saveRun(this.run)
+    this.emitProgress()
+    return index
+  }
+
   async stepStarted(index: number, input?: unknown): Promise<void> {
     this.assertOpen()
     const step = this.step(index)

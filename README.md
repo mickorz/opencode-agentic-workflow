@@ -605,11 +605,46 @@ export default defineWorkflow({
   resume / 版本解析 / metrics / 面板详情与 Open Session 回放全部一致
   （代码流程的 sessionIDs 同样落盘）
 - **journal 契约**：编排步骤统一走 `ctx.runSteps(steps, { stepNames })`——
-  手动 `await` 编排不会进 journal，resume 无从谈起
+  手动 `await` 编排不会进 journal，resume 无从谈起（**v1 脚本例外**：叶子
+  调用动态 journal，见下节）
 - **形态约定**：模块 `export default`（或具名 `definition`）一个
   `defineWorkflow({...})` 结果；`id` 唯一且不撞内置（smoke/reliable/
   artifact/feature-development），结构变更必须升 `version`
 - TS 用户：先 `tsc` 出 `.js`（装载器只认 `.js/.mjs/.cjs`，不内嵌 TS 编译）
+
+### v1 脚本（legacy）直接装载（v0.8.0）
+
+[opencode-dynamic-workflows](https://www.npmjs.com/package/@mickorz/opencode-dynamic-workflows)
+（v1）时代的脚本体**原样放 flows/ 目录即可运行，不改写、不迁移**。识别
+条件：文件含 `export const meta = {...}` 且不含 `defineWorkflow`：
+
+```js
+// flows/smoke-test.js —— v1 脚本原样
+export const meta = { name: 'smoke_test', description: '最小冒烟：2 个 agent 并行' }
+
+phase('Scan')
+const info = await agent('列出当前目录下的文件')
+
+phase('Echo')
+const results = await parallel([
+  () => agent('说明工作流编排'),
+  () => agent('说明确定性重放'),
+])
+return { info, results }
+```
+
+19 个 v1 全局（`agent/parallel/pipeline/sequence/fallback/race/check/
+fileExists/commandSuccess/phase/log/args/setConcurrency/verify/judgePanel/
+retry/checkpoint/workflow/console`）由适配层绑定到 v2 原语：`meta.name`
+即 flow id；agent/checkpoint/subflow 叶子调用动态进 journal（TUI 面板
+实时可见）；可恢复失败（agent 超时 / schema / check 未过）在
+parallel/pipeline 中塌缩 `null`、sequence 停止返 `null`（v1 语义）；
+`checkpoint` 返回 boolean（拒绝不抛）；`schema` 选项走结构化输出 shim。
+
+与 v1 的差异（fail-loud）：`setConcurrency()` 警告后忽略（v2 并发由
+executor 统一管理）；`phase()` 只进日志/事件（v2 面板无阶段分组）；
+resume = 整体重跑；脚本内不能有 static `import` / 除 meta 外的 `export`。
+新流程仍推荐 v2 `.mjs`（argsSchema 进工具 hint、resume 支持步骤前缀跳过）。
 
 ## 并发 run（顶层多飞）
 

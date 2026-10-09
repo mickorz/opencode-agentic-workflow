@@ -7,8 +7,11 @@
  *
  * 装载契约：
  *   - 入口：.js / .mjs / .cjs 文件路径或目录（扫一层，忽略点开头文件）；相对 baseDir
- *   - 模块导出：default / definition / workflow 三形态之一，最小形状校验
+ *   - v2 模块形态：default / definition / workflow 三形态之一，最小形状校验
  *     （id/version 非空字符串 + run 函数）
+ *   - v1 脚本形态（v0.8.0）：`export const meta = {...}` + 魔法全局
+ *     `phase/agent/parallel/...` + 顶层 return——legacy 适配分支装载
+ *     （见 legacy-script.ts），不改写、不迁移
  *   - <pkg>/core 裸说明符重写（v0.6.0）：用户 flows 目录通常解析不到本包
  *     （包在 opencode 全局缓存，不在用户 node_modules 链上）——装载时把
  *     "<pkg>/core" 重写为插件自身 dist/core 的绝对 file URL 再导入，
@@ -30,6 +33,13 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 import type { WorkflowDefinition } from "../registry/definition.js"
 import type { AnyWorkflowDefinition } from "../registry/registry.js"
+import {
+  buildLegacyDefinition,
+  detectLegacyScript,
+  splitLegacyMeta,
+  validateLegacyMeta,
+  wrapLegacyModule,
+} from "./legacy-script.js"
 
 /** 代码流程模块扩展名 */
 const CODE_EXTENSIONS = [".js", ".mjs", ".cjs"] as const
@@ -95,9 +105,69 @@ async function expandEntries(entries: string[], baseDir: string): Promise<{ file
 }
 
 /**
+ * 在用户目录旁导入改写后的模块源（保留该文件其余相对/npm 解析语义）：
+ * 同目录隐藏临时 .mjs → import → 清理；目录不可写时回退 data: URL。
+ */
+async function importRewrittenSource(file: string, source: string): Promise<unknown> {
+  const temp = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${createHash("sha256").update(file).digest("hex").slice(0, 8)}.aw.mjs`,
+  )
+  try {
+    await writeFile(temp, source, "utf8")
+    try {
+      return await import(pathToFileURL(temp).href)
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined)
+    }
+  } catch {
+    // 目录不可写等：回退 data: URL（此形态下文件内其余相对导入不可用，核心 API 可用）
+    return import("data:text/javascript;base64," + Buffer.from(source, "utf8").toString("base64"))
+  }
+}
+
+/**
+ * 装载 v1 脚本形态（v0.8.0）：剥离 meta → 包裹为全局形参 async 函数模块 →
+ * 同目录临时文件 import → 校验 meta → 构造 WorkflowDefinition。
+ * v1 全局由 definition.run 在每次执行时绑定（见 legacy-script.ts）。
+ */
+async function loadLegacyScriptModule(
+  file: string,
+  source: string,
+): Promise<{ ok: true; definition: WorkflowDefinition } | { ok: false; error: string }> {
+  const at = (msg: string) => `${path.basename(file)}: ${msg}`
+  const split = splitLegacyMeta(source)
+  if (!split.ok) return { ok: false, error: at(split.error) }
+  const wrapped = wrapLegacyModule(split.metaStatement, split.rest)
+  if (!wrapped.ok) return { ok: false, error: at(wrapped.error) }
+
+  let mod: unknown
+  try {
+    mod = await importRewrittenSource(file, wrapped.wrapped)
+  } catch (error) {
+    return {
+      ok: false,
+      error: at(`failed to import legacy script (${error instanceof Error ? error.message : String(error)})`),
+    }
+  }
+  if (typeof mod !== "object" || mod === null) {
+    return { ok: false, error: at("legacy script module import returned nothing") }
+  }
+  const record = mod as { meta?: unknown; default?: unknown }
+  const meta = validateLegacyMeta(record.meta)
+  if (!meta.ok) return { ok: false, error: at(meta.error) }
+  if (typeof record.default !== "function") {
+    return { ok: false, error: at("legacy script body did not compile into a function") }
+  }
+  const bodyFn = record.default as (...globals: unknown[]) => Promise<unknown>
+  return { ok: true, definition: buildLegacyDefinition(meta.meta, bodyFn) }
+}
+
+/**
  * 装载代码流程模块：.js/.mjs/.cjs 动态 import，取
  * default / definition / workflow 三种导出形态之一，校验
  * WorkflowDefinition 最小形状（id/version 字符串 + run 函数）。
+ * v1 脚本形态（export const meta + 魔法全局）走 legacy 适配分支。
  * 含 <pkg>/core 裸说明符重写（见文件头）。返回定义或错误文案（含文件名前缀）；不抛出。
  */
 async function loadCodeWorkflowModule(
@@ -109,6 +179,10 @@ async function loadCodeWorkflowModule(
     source = await readFile(file, "utf8")
   } catch (error) {
     return { ok: false, error: at(`failed to read (${error instanceof Error ? error.message : String(error)})`) }
+  }
+
+  if (detectLegacyScript(source)) {
+    return loadLegacyScriptModule(file, source)
   }
 
   const coreUrl = coreBarrelUrl()
@@ -129,22 +203,7 @@ async function loadCodeWorkflowModule(
         error: at(`imports "${PKG_CORE_SPEC}" but .cjs cannot be specifier-rewritten - rename to .mjs (ESM)`),
       }
     } else {
-      // 同目录隐藏临时 .mjs：保留该文件其余相对/npm 导入的解析语义
-      const temp = path.join(
-        path.dirname(file),
-        `.${path.basename(file)}.${createHash("sha256").update(file).digest("hex").slice(0, 8)}.aw.mjs`,
-      )
-      try {
-        await writeFile(temp, rewritten, "utf8")
-        try {
-          mod = await import(pathToFileURL(temp).href)
-        } finally {
-          await rm(temp, { force: true }).catch(() => undefined)
-        }
-      } catch {
-        // 目录不可写等：回退 data: URL（此形态下文件内其余相对导入不可用，核心 API 可用）
-        mod = await import("data:text/javascript;base64," + Buffer.from(rewritten, "utf8").toString("base64"))
-      }
+      mod = await importRewrittenSource(file, rewritten)
     }
   } catch (error) {
     return { ok: false, error: at(`failed to import (${error instanceof Error ? error.message : String(error)})`) }
