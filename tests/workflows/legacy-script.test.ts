@@ -247,19 +247,29 @@ return r
     /阶段失败闸门触发/,
   )
 
-  // 结构性错误：整个 parallel 拒绝
-  const structural = `export const meta = { name: 'p_test3' }
+  // v1 分类学：普通 Error 默认可恢复 → 塌缩 null + 登记闸门 → run 终检触发
+  const plainErr = `export const meta = { name: 'p_test3' }
 const r = await parallel([() => agent('好')])
 return r
 `
   const badExecutor: AgentExecutor = {
     async execute() {
-      throw new TypeError("结构性错误")
+      throw new TypeError("普通执行错误")
     },
   }
   await assert.rejects(
-    runV1Script(structural, { executor: badExecutor }),
-    /结构性错误/,
+    runV1Script(plainErr, { executor: badExecutor }),
+    /阶段失败闸门触发/,
+  )
+
+  // 真结构性（适配层契约：未知选项）→ parallel 立即上抛，不塌缩
+  const structural = `export const meta = { name: 'p_test4' }
+const r = await parallel([() => agent('好', { noSuchOption: 1 })])
+return r
+`
+  await assert.rejects(
+    runV1Script(structural, { executor: echoExecutor() }),
+    /不支持选项 "noSuchOption"/,
   )
 })
 
@@ -284,6 +294,26 @@ return v
 `
   const stop = await runV1Script(stopSource, { executor: echoExecutor() })
   assert.equal(stop.result, null)
+
+  // v1 分类学：普通 Error 也算可恢复 → sequence 停止返 null，run 正常完成
+  // （seq_fail_parent 对位：后续节点不执行，流程不崩）
+  const plainStop = `export const meta = { name: 'seq_plain_stop' }
+const seen = []
+const r = await sequence([
+  () => { seen.push('a'); return 'step-a' },
+  () => { seen.push('b'); throw new Error('第二个节点故意失败') },
+  () => { seen.push('c'); return 'never' },
+])
+const after = await agent('回复固定文本：STOP-CHECK')
+return { seqResult: r, isNull: r === null, seen, after }
+`
+  const plain = await runV1Script(plainStop, { executor: echoExecutor() })
+  assert.deepEqual(plain.result, {
+    seqResult: null,
+    isNull: true,
+    seen: ["a", "b"],
+    after: "echo:回复固定文本：STOP-CHECK",
+  })
 })
 
 test("check：通过返回 true；未通过抛可恢复错误（带自定义消息）", async () => {
@@ -462,6 +492,27 @@ return { a, b }
     steps.map((s) => s.name),
     ["subflow:ref_child", "subflow:ref_child(B道)"],
   )
+})
+
+test("workflow：args 克隆隔离——子流程改 args 不污染父对象（v1 mutate 验收对位）", async () => {
+  const source = `export const meta = { name: 'wf_clone' }
+const cfg = { counter: 1 }
+await workflow('mutate_child', { cfg })
+return { counter: cfg.counter, injected: 'injected' in cfg }
+`
+  // 假 subflow：真实模拟子流程对 args 的原位改写（无克隆即污染父对象）
+  const { result } = await runV1Script(source, {
+    executor: echoExecutor(),
+    subflow: async (_id, args) => {
+      const cfg = (args as { cfg?: { counter?: number; injected?: boolean } }).cfg
+      if (cfg) {
+        cfg.counter = 999
+        cfg.injected = true
+      }
+      return { runId: "sub_c", output: "ok" }
+    },
+  })
+  assert.deepEqual(result, { counter: 1, injected: false })
 })
 
 test("workflow：未知引用 fail-loud（列出已试基准）", async () => {

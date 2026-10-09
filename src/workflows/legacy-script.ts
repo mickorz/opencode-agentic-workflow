@@ -31,8 +31,9 @@ import path from "node:path"
 
 import type { WorkflowDefinition, WorkflowContext } from "../registry/definition.js"
 import type { RunJournal } from "../state/recorder.js"
-import { agent as coreAgent, AgentTimeoutError, AgentSchemaError, type AgentCallOptions } from "../workflow/agent.js"
+import { agent as coreAgent, type AgentCallOptions } from "../workflow/agent.js"
 import { phase as corePhase } from "../workflow/phase.js"
+import { RunAbortedError } from "../registry/run-control.js"
 import { GitWorktreeProvider } from "../workspace/git-worktree.js"
 import { resolveFlowRef } from "./flow-index.js"
 import {
@@ -182,12 +183,29 @@ class LegacyCheckError extends Error {
   }
 }
 
+/**
+ * 结构性错误（不可恢复）：适配层自身的契约/校验/闸门失败——对位 v1 显式
+ * `recoverable: false` 的 WorkflowError（SCRIPT_VALIDATION_ERROR /
+ * WORKFLOW_FAILED / CHECKPOINT_REJECTED 等）。在 parallel/pipeline/
+ * sequence/fallback/race 中不被塌缩/吞掉，立即上抛。
+ */
+export class LegacyStructuralError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "LegacyStructuralError"
+  }
+}
+
+/**
+ * v1 错误分类学（errors.ts wrapError 对位）：未知错误（含普通 Error、
+ * 子流程业务失败、agent 超时/schema）默认**可恢复**（AGENT_FAILED）——
+ * parallel/pipeline 塌缩 null、sequence 停止返 null、fallback/race 换候选；
+ * 只有 LegacyStructuralError 与 abort 直通例外。
+ */
 function isRecoverableFailure(error: unknown): boolean {
-  return (
-    error instanceof AgentTimeoutError ||
-    error instanceof AgentSchemaError ||
-    error instanceof LegacyCheckError
-  )
+  if (error instanceof LegacyStructuralError) return false
+  if (error instanceof RunAbortedError) return false
+  return true
 }
 
 /** journal 步骤 input 预览（截断，避免大 prompt 落盘膨胀） */
@@ -271,7 +289,7 @@ const JUDGE_SCHEMA: Record<string, unknown> = {
 function normalizeFanout(value: unknown, fallback: number, optionName: string): number {
   const count = value === undefined ? fallback : value
   if (typeof count !== "number" || !Number.isFinite(count) || !Number.isInteger(count) || count < 1) {
-    throw new TypeError(`${optionName} 必须是大于等于 1 的整数`)
+    throw new LegacyStructuralError(`${optionName} 必须是大于等于 1 的整数`)
   }
   return count
 }
@@ -301,11 +319,11 @@ export function buildLegacyDefinition(
       // 登记待裁决——下一 phase() 边界或 run 终检触发终止报告；
       // fallback/race 成功吸收时清除。结构性错误不走此路径（立即上抛）。
       const pendingGate: Array<{ label: string; error: string }> = []
-      const gateError = (): Error => {
+      const gateError = (): LegacyStructuralError => {
         const lines = pendingGate.map((g) => `  - ${g.label}: ${g.error}`).join("\n")
         const detail = `阶段失败闸门触发：存在未吸收的可恢复 agent 失败——\n${lines}`
         pendingGate.length = 0
-        return new Error(detail)
+        return new LegacyStructuralError(detail)
       }
 
       const log = (...values: unknown[]) => {
@@ -319,11 +337,11 @@ export function buildLegacyDefinition(
 
       const agent = async (prompt: string, opts?: LegacyAgentOptions): Promise<unknown> => {
         if (typeof prompt !== "string" || prompt.length === 0) {
-          throw new TypeError("agent(prompt, opts?) 需要非空提示词")
+          throw new LegacyStructuralError("agent(prompt, opts?) 需要非空提示词")
         }
         for (const key of Object.keys(opts ?? {})) {
           if (!LEGACY_AGENT_OPTION_KEYS.has(key)) {
-            throw new TypeError(
+            throw new LegacyStructuralError(
               `agent() 不支持选项 "${key}"（legacy 适配层已知全集：${[...LEGACY_AGENT_OPTION_KEYS].join(", ")}）`,
             )
           }
@@ -402,10 +420,10 @@ export function buildLegacyDefinition(
 
       const parallel = async (thunks: Array<() => Promise<unknown>>): Promise<unknown[]> => {
         if (!Array.isArray(thunks)) {
-          throw new TypeError("parallel() 期望函数数组")
+          throw new LegacyStructuralError("parallel() 期望函数数组")
         }
         if (thunks.some((t) => typeof t !== "function")) {
-          throw new TypeError("parallel() 期望函数数组而非 Promise 数组，请用 () => agent(...) 包裹")
+          throw new LegacyStructuralError("parallel() 期望函数数组而非 Promise 数组，请用 () => agent(...) 包裹")
         }
         const settled = await Promise.all(
           thunks.map(async (thunk) => {
@@ -426,7 +444,7 @@ export function buildLegacyDefinition(
         items: unknown[],
         stages: Array<(value: unknown, original: unknown, index: number) => Promise<unknown> | unknown>,
       ): Promise<unknown[]> => {
-        if (!Array.isArray(items)) throw new TypeError("pipeline() 期望条目数组")
+        if (!Array.isArray(items)) throw new LegacyStructuralError("pipeline() 期望条目数组")
         if (!Array.isArray(stages) || stages.length === 0) return [...items]
         const settled = await Promise.all(
           items.map(async (item, index) => {
@@ -448,7 +466,7 @@ export function buildLegacyDefinition(
       }
 
       const sequence = async (nodes: Array<(prev?: unknown) => Promise<unknown>>): Promise<unknown> => {
-        if (!Array.isArray(nodes)) throw new TypeError("sequence() 期望节点函数数组")
+        if (!Array.isArray(nodes)) throw new LegacyStructuralError("sequence() 期望节点函数数组")
         let value: unknown
         for (const [index, node] of nodes.entries()) {
           try {
@@ -472,7 +490,7 @@ export function buildLegacyDefinition(
        */
       const fallback = async (candidates: Array<() => Promise<unknown>>): Promise<unknown> => {
         if (!Array.isArray(candidates) || candidates.length === 0) {
-          throw new TypeError("fallback() 期望非空候选函数数组")
+          throw new LegacyStructuralError("fallback() 期望非空候选函数数组")
         }
         for (const [index, candidate] of candidates.entries()) {
           const before = pendingGate.length
@@ -505,7 +523,7 @@ export function buildLegacyDefinition(
        */
       const race = (branches: Array<() => Promise<unknown>>): Promise<unknown> => {
         if (!Array.isArray(branches) || branches.length === 0) {
-          throw new TypeError("race() 期望至少一个分支")
+          throw new LegacyStructuralError("race() 期望至少一个分支")
         }
         return new Promise<unknown>((resolve, reject) => {
           let settled = false
@@ -554,14 +572,14 @@ export function buildLegacyDefinition(
         message?: string,
       ): Promise<boolean> => {
         if (typeof condition !== "function") {
-          throw new TypeError("check(condition, message?) 需要函数条件")
+          throw new LegacyStructuralError("check(condition, message?) 需要函数条件")
         }
         let passed: boolean
         try {
           passed = await condition()
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
-          throw new TypeError(`check 条件执行出错（不是验证未通过，是检查代码出错）：${reason}`)
+          throw new LegacyStructuralError(`check 条件执行出错（不是验证未通过，是检查代码出错）：${reason}`)
         }
         if (passed === true) return true
         throw new LegacyCheckError(message ?? "check 验证未通过")
@@ -590,7 +608,7 @@ export function buildLegacyDefinition(
 
       const setConcurrency = (value: number): void => {
         if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-          throw new TypeError(`setConcurrency 需要正整数，收到 ${String(value)}`)
+          throw new LegacyStructuralError(`setConcurrency 需要正整数，收到 ${String(value)}`)
         }
         console.warn(
           `[agentic-workflow] setConcurrency(${value}) is ignored: v2 executor concurrency is managed globally (legacy adapter)`,
@@ -633,7 +651,7 @@ export function buildLegacyDefinition(
         const candidates = Array.isArray(attempts)
           ? attempts.map((attempt, index) => ({ attempt, index })).filter((c) => c.attempt != null)
           : []
-        if (candidates.length === 0) throw new TypeError("judgePanel() 需要非空候选数组")
+        if (candidates.length === 0) throw new LegacyStructuralError("judgePanel() 需要非空候选数组")
         const rubric = opts.rubric ?? "overall quality and correctness"
         const scored = (await parallel(
           candidates.map(({ attempt, index }) => async () => {
@@ -655,7 +673,7 @@ export function buildLegacyDefinition(
           }),
         )) as Array<LegacyJudged | null>
         const valid = scored.filter((s): s is LegacyJudged => s != null)
-        if (valid.length === 0) throw new TypeError("judgePanel() 全部候选评审失败")
+        if (valid.length === 0) throw new LegacyStructuralError("judgePanel() 全部候选评审失败")
         // 最高均分；同分稳定取输入顺序靠前者（v1 同款）
         let best = valid[0]!
         for (const s of valid) {
@@ -713,15 +731,29 @@ export function buildLegacyDefinition(
         subArgs?: unknown,
       ): Promise<unknown> => {
         if (ctx.subflow === undefined) {
-          throw new Error(
+          throw new LegacyStructuralError(
             `workflow(${String(ref)}) 子流程需要 journalDir（ExecutionStore）；未配置的 run 不提供 subflow`,
           )
         }
         const resolved = resolveFlowRef(ref, sourceFile !== undefined ? [path.dirname(sourceFile)] : [])
-        if (!resolved.ok) throw new Error(resolved.error)
+        if (!resolved.ok) throw new LegacyStructuralError(resolved.error)
         const stepName = `subflow:${resolved.id}${resolved.label !== undefined ? `(${resolved.label})` : ""}`
         const outcome = await journaledStep(journal, stepName, subArgs, async () => {
-          const sub = await ctx.subflow!(resolved.id, subArgs)
+          // v1 args 克隆隔离：子流程拿到的是深拷贝——子内 args.cfg.xxx = ...
+          // 不得污染父对象（mutate_parent 验收点）。v2 subflow 直传原引用，
+          // 克隆在适配层强制。
+          let clonedSubArgs: unknown = subArgs
+          if (subArgs !== undefined) {
+            try {
+              clonedSubArgs = structuredClone(subArgs)
+            } catch {
+              // v1 SCRIPT_VALIDATION_ERROR 对位：args 必须可深拷贝
+              throw new LegacyStructuralError(
+                "workflow() 的 args 必须是 structured-clone-compatible 数据（object/array/string/number/boolean/null）",
+              )
+            }
+          }
+          const sub = await ctx.subflow!(resolved.id, clonedSubArgs as object)
           // v1 语义：workflow() 返回子流程的返回值本体（对象直取字段）。
           // v2 subflow 契约给 output 字符串（toOutput：对象已 JSON 化）——
           // 可解析则还原为对象，纯文本保持字符串。
