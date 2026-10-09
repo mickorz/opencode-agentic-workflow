@@ -32,9 +32,9 @@ import path from "node:path"
 import type { WorkflowDefinition, WorkflowContext } from "../registry/definition.js"
 import type { RunJournal } from "../state/recorder.js"
 import { agent as coreAgent, AgentTimeoutError, AgentSchemaError, type AgentCallOptions } from "../workflow/agent.js"
-import { fallback as coreFallback } from "../workflow/fallback.js"
-import { race as coreRace } from "../workflow/race.js"
 import { phase as corePhase } from "../workflow/phase.js"
+import { GitWorktreeProvider } from "../workspace/git-worktree.js"
+import { resolveFlowRef } from "./flow-index.js"
 import {
   checkpoint as coreCheckpoint,
   getCheckpointGate,
@@ -215,10 +215,30 @@ async function journaledStep<T>(
   }
 }
 
-/** v1 agent 选项（label 为 journal/树标签；其余透传 v2 core agent） */
+/** v1 agent 选项（label 为 journal/树标签；isolation 为 per-call worktree） */
 interface LegacyAgentOptions extends AgentCallOptions {
   label?: string
+  /** v1 per-call 隔离：独立 git worktree 中执行（结束自动拆除） */
+  isolation?: "worktree"
+  /** v1 子 agent 类型：v2 无调用级对位（run 级由插件 options.agent 配）——警告后忽略 */
+  agentType?: string
+  /** v1 模型分层路由：v2 无 tier 配置——警告后回落 run 级模型（即 v1 的回退行为） */
+  tier?: string
 }
+
+/** v1 agent 选项全集（超出即 fail-loud，防静默语义丢失） */
+const LEGACY_AGENT_OPTION_KEYS = new Set([
+  "label",
+  "timeoutMs",
+  "retries",
+  "retryDelayMs",
+  "schema",
+  "model",
+  "isolation",
+  "agentType",
+  "tier",
+  "cwd",
+])
 
 /** v1 verify 的对抗评审返回（脚本消费 verdict.real / verdict.realCount） */
 interface LegacyVerifyResult {
@@ -263,6 +283,7 @@ function normalizeFanout(value: unknown, fallback: number, optionName: string): 
 export function buildLegacyDefinition(
   meta: LegacyMeta,
   bodyFn: (...globals: unknown[]) => Promise<unknown>,
+  sourceFile?: string,
 ): WorkflowDefinition {
   return {
     id: meta.name,
@@ -271,20 +292,53 @@ export function buildLegacyDefinition(
     argsSchema: {
       type: "object",
       properties: { topic: { type: "string" } },
-      required: ["topic"],
     },
     async run(args: Record<string, unknown>, ctx: WorkflowContext) {
       const journal = ctx.journal
       const workspaceRoot = ctx.workspaceRoot ?? process.cwd()
       let agentCount = 0
+      // v1 阶段失败闸门（Bug1 对位）：可恢复 agent 失败塌缩 null 继续跑，
+      // 登记待裁决——下一 phase() 边界或 run 终检触发终止报告；
+      // fallback/race 成功吸收时清除。结构性错误不走此路径（立即上抛）。
+      const pendingGate: Array<{ label: string; error: string }> = []
+      const gateError = (): Error => {
+        const lines = pendingGate.map((g) => `  - ${g.label}: ${g.error}`).join("\n")
+        const detail = `阶段失败闸门触发：存在未吸收的可恢复 agent 失败——\n${lines}`
+        pendingGate.length = 0
+        return new Error(detail)
+      }
 
       const log = (...values: unknown[]) => {
         console.log(`[agentic-workflow] ${values.map((v) => (typeof v === "string" ? v : JSON.stringify(v) ?? String(v))).join(" ")}`)
       }
 
-      const agent = (prompt: string, opts?: LegacyAgentOptions): Promise<unknown> => {
+      const phase = (name: string): void => {
+        if (pendingGate.length > 0) throw gateError()
+        corePhase(name)
+      }
+
+      const agent = async (prompt: string, opts?: LegacyAgentOptions): Promise<unknown> => {
         if (typeof prompt !== "string" || prompt.length === 0) {
           throw new TypeError("agent(prompt, opts?) 需要非空提示词")
+        }
+        for (const key of Object.keys(opts ?? {})) {
+          if (!LEGACY_AGENT_OPTION_KEYS.has(key)) {
+            throw new TypeError(
+              `agent() 不支持选项 "${key}"（legacy 适配层已知全集：${[...LEGACY_AGENT_OPTION_KEYS].join(", ")}）`,
+            )
+          }
+        }
+        if (opts?.agentType !== undefined) {
+          console.warn(
+            `[agentic-workflow] agent({ agentType: "${opts.agentType}" }) is ignored: ` +
+              `v2 has no per-call agent type (configure run-level agent via plugin options.agent)`,
+          )
+        }
+        if (opts?.tier !== undefined) {
+          console.warn(
+            `[agentic-workflow] agent({ tier: "${opts.tier}" }) falls back to the run-level model: ` +
+              `v2 has no tier routing config (this mirrors the v1 unconfigured-tier fallback)`,
+          )
         }
         const label = opts?.label ?? `agent-${++agentCount}`
         const passThrough: AgentCallOptions = {}
@@ -292,10 +346,58 @@ export function buildLegacyDefinition(
           const value = opts?.[key]
           if (value !== undefined) (passThrough as Record<string, unknown>)[key] = value
         }
-        return journaledStep(journal, label, prompt, async () => {
-          const result = await coreAgent(prompt, passThrough)
-          return opts?.schema !== undefined ? result.structured : result.output
-        })
+
+        // v1 per-call worktree 隔离：独立 worktree 中执行，结束自动拆除；
+        // 仓库不可用（非 git 等）降级共享目录并响亮说明（v1 同款语义）
+        const useWorktree = opts?.isolation === "worktree"
+        const inner = async (): Promise<unknown> => {
+          let handle: Awaited<ReturnType<GitWorktreeProvider["create"]>> | undefined
+          if (useWorktree) {
+            try {
+              // 分支名清洗：label 可能含中文/冒号/空格（如「子workflow:middle」）
+              const safeLabel = label.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40)
+              handle = await new GitWorktreeProvider({ startDir: workspaceRoot }).create(
+                `legacy-${ctx.runId}-${safeLabel}`,
+              )
+              console.log(`[agentic-workflow] agent "${label}" worktree 隔离：${handle.root}`)
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error)
+              console.warn(
+                `[agentic-workflow] agent "${label}" 的 worktree 隔离不可用，降级共享目录（${reason}）`,
+              )
+            }
+          }
+          try {
+            const effectivePrompt =
+              handle !== undefined
+                ? prompt +
+                  `\n\n[工作目录] 你在一个独立的 git worktree 中（路径 ${handle.root}）。` +
+                  `全部文件操作必须在以下目录内进行，用绝对路径或先 cd：\n${handle.root}`
+                : prompt
+            const result = await coreAgent(effectivePrompt, {
+              ...passThrough,
+              ...(handle !== undefined ? { cwd: handle.root } : {}),
+            })
+            return opts?.schema !== undefined ? result.structured : result.output
+          } finally {
+            if (handle !== undefined) {
+              await handle.dispose({ force: true }).catch(() => undefined)
+            }
+          }
+        }
+        // v1 语义：可恢复失败（超时/schema 耗尽重试）记 failed 后塌缩 null 继续，
+        // 登记阶段失败闸门（下一 phase() 边界或 run 终检裁决）；结构性错误上抛
+        try {
+          return await journaledStep(journal, label, prompt, inner)
+        } catch (error) {
+          if (isRecoverableFailure(error)) {
+            const message = error instanceof Error ? error.message : String(error)
+            log(`agent "${label}" 尝试失败（可恢复，塌缩 null）：${message}`)
+            pendingGate.push({ label, error: message })
+            return null
+          }
+          throw error
+        }
       }
 
       const parallel = async (thunks: Array<() => Promise<unknown>>): Promise<unknown[]> => {
@@ -363,18 +465,88 @@ export function buildLegacyDefinition(
         return value
       }
 
-      const fallback = (candidates: Array<() => Promise<unknown>>): Promise<unknown> => {
+      /**
+       * fallback（v1 语义原味）：候选成功即清空整个失败闸门（降级成功=显式吸收，
+       * 否则 fallback 语义报废）；「null + 候选窗口内新增登记」视为候选失败换下一个；
+       * 可恢复失败换候选；结构性错误上抛；全部失败返回 null（登记保留，终检裁决）。
+       */
+      const fallback = async (candidates: Array<() => Promise<unknown>>): Promise<unknown> => {
         if (!Array.isArray(candidates) || candidates.length === 0) {
           throw new TypeError("fallback() 期望非空候选函数数组")
         }
-        return coreFallback(candidates)
+        for (const [index, candidate] of candidates.entries()) {
+          const before = pendingGate.length
+          let value: unknown
+          try {
+            value = await candidate()
+          } catch (error) {
+            if (isRecoverableFailure(error)) {
+              const message = error instanceof Error ? error.message : String(error)
+              log(`fallback[${index}] 失败，尝试下一候选: ${message}`)
+              continue
+            }
+            throw error
+          }
+          if (value === null && pendingGate.length > before) {
+            pendingGate.length = before
+            log(`fallback[${index}] 候选返回 null 且有耗尽失败登记，视为候选失败换下一个`)
+            continue
+          }
+          if (pendingGate.length > 0) pendingGate.length = 0
+          return value
+        }
+        log("fallback 全部候选失败，返回 null")
+        return null
       }
 
+      /**
+       * race（v1 语义原味）：首个真成功胜出并清空闸门（败者的耗尽失败已被吸收）；
+       * 「null + 登记回滚」按可恢复失败计；全部分支失败返回 null；结构性错误立即上抛。
+       */
       const race = (branches: Array<() => Promise<unknown>>): Promise<unknown> => {
         if (!Array.isArray(branches) || branches.length === 0) {
           throw new TypeError("race() 期望至少一个分支")
         }
-        return coreRace(branches)
+        return new Promise<unknown>((resolve, reject) => {
+          let settled = false
+          let failureCount = 0
+          const total = branches.length
+          for (const [index, branch] of branches.entries()) {
+            const startLen = pendingGate.length
+            void branch().then(
+              (value) => {
+                if (value === null && pendingGate.length > startLen) {
+                  pendingGate.length = startLen
+                  return { ok: false as const, error: new Error("候选返回 null 且有耗尽失败登记") }
+                }
+                return { ok: true as const, value }
+              },
+              (error: unknown) => ({ ok: false as const, error }),
+            ).then((outcome) => {
+              if (settled) return
+              if (outcome.ok) {
+                settled = true
+                log(`race[${index}] 胜出`)
+                if (pendingGate.length > 0) pendingGate.length = 0
+                resolve(outcome.value)
+                return
+              }
+              if (!isRecoverableFailure(outcome.error)) {
+                settled = true
+                reject(outcome.error)
+                return
+              }
+              failureCount += 1
+              const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+              log(`race[${index}] 失败（${failureCount}/${total}）: ${message}`)
+              if (failureCount === total) {
+                settled = true
+                log("race 全部分支失败，返回 null")
+                resolve(null)
+              }
+            })
+          }
+        })
       }
 
       const check = async (
@@ -532,17 +704,36 @@ export function buildLegacyDefinition(
         })
       }
 
-      /** 子工作流（v1 workflow 全局 → ctx.subflow；需要 journalDir） */
+      /**
+       * 子工作流（v1 workflow 全局三形态：注册名 / 脚本路径 / {scriptPath,label}）。
+       * 返回子流程原始返回值（对象经 JSON 还原——v1 的 spec.brief 直取语义）。
+       */
       const workflow = async (
-        id: string,
+        ref: unknown,
         subArgs?: unknown,
-      ): Promise<{ runId: string; output: string }> => {
+      ): Promise<unknown> => {
         if (ctx.subflow === undefined) {
           throw new Error(
-            `workflow(${id}) 子流程需要 journalDir（ExecutionStore）；未配置的 run 不提供 subflow`,
+            `workflow(${String(ref)}) 子流程需要 journalDir（ExecutionStore）；未配置的 run 不提供 subflow`,
           )
         }
-        return journaledStep(journal, `subflow:${id}`, subArgs, () => ctx.subflow!(id, subArgs))
+        const resolved = resolveFlowRef(ref, sourceFile !== undefined ? [path.dirname(sourceFile)] : [])
+        if (!resolved.ok) throw new Error(resolved.error)
+        const stepName = `subflow:${resolved.id}${resolved.label !== undefined ? `(${resolved.label})` : ""}`
+        const outcome = await journaledStep(journal, stepName, subArgs, async () => {
+          const sub = await ctx.subflow!(resolved.id, subArgs)
+          // v1 语义：workflow() 返回子流程的返回值本体（对象直取字段）。
+          // v2 subflow 契约给 output 字符串（toOutput：对象已 JSON 化）——
+          // 可解析则还原为对象，纯文本保持字符串。
+          try {
+            const parsed = JSON.parse(sub.output) as unknown
+            if (parsed !== null && typeof parsed === "object") return parsed
+          } catch {
+            // 非合法 JSON：按纯文本返回
+          }
+          return sub.output
+        })
+        return outcome
       }
 
       const consoleShim = {
@@ -553,7 +744,7 @@ export function buildLegacyDefinition(
       }
 
       const globals: unknown[] = [
-        corePhase,
+        phase,
         agent,
         parallel,
         pipeline,
@@ -575,6 +766,8 @@ export function buildLegacyDefinition(
       ]
 
       const result = await bodyFn(...globals)
+      // v1 run 终检：存在未吸收的可恢复失败 → 终止报告（run 判 failed）
+      if (pendingGate.length > 0) throw gateError()
       return result as never
     },
   }

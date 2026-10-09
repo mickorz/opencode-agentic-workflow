@@ -39,6 +39,12 @@ export interface AgentCallOptions {
    * prompt 指令 + 校验 + 失败可重试（retries）保证可靠性，非宿主级约束。
    */
   schema?: ArgsSchema
+  /**
+   * 调用级工作目录覆盖（v0.8.1 legacy 适配用）：存在时优先于 ambient
+   * workspace——v1 脚本的 per-call `isolation: 'worktree'` 由适配层创建
+   * worktree 后经此传入。executor 侧语义与 P2.7 的 task.cwd 一致。
+   */
+  cwd?: string
 }
 
 /** 结构化输出解析/校验失败（配合 retries 可重试） */
@@ -132,7 +138,11 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
   const task = {
     prompt: effectivePrompt,
     ...(options.model !== undefined ? { model: parseModelRef(options.model) } : {}),
-    ...(workspace ? { cwd: workspace.root } : {}),
+    ...(options.cwd !== undefined
+      ? { cwd: options.cwd }
+      : workspace
+        ? { cwd: workspace.root }
+        : {}),
   }
   const retries = options.retries ?? 0
   const retryDelayMs = options.retryDelayMs ?? 0

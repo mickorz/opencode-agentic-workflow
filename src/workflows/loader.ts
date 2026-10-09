@@ -33,6 +33,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 
 import type { WorkflowDefinition } from "../registry/definition.js"
 import type { AnyWorkflowDefinition } from "../registry/registry.js"
+import { registerFlowFile, registerFlowRoot } from "./flow-index.js"
 import {
   buildLegacyDefinition,
   detectLegacyScript,
@@ -160,7 +161,7 @@ async function loadLegacyScriptModule(
     return { ok: false, error: at("legacy script body did not compile into a function") }
   }
   const bodyFn = record.default as (...globals: unknown[]) => Promise<unknown>
-  return { ok: true, definition: buildLegacyDefinition(meta.meta, bodyFn) }
+  return { ok: true, definition: buildLegacyDefinition(meta.meta, bodyFn, file) }
 }
 
 /**
@@ -244,6 +245,8 @@ export async function loadCustomWorkflows(
   const definitions: AnyWorkflowDefinition[] = []
   const reserved = new Set(reservedIds)
   const seenIds = new Map<string, string>()
+  // 装载索引（legacy workflow() 路径形解析用）：入口根 + 文件 → id
+  for (const entry of entries) registerFlowRoot(path.resolve(baseDir, entry))
   for (const file of files) {
     const loaded = await loadCodeWorkflowModule(file)
     if (!loaded.ok) {
@@ -261,6 +264,7 @@ export async function loadCustomWorkflows(
       continue
     }
     seenIds.set(key, path.basename(file))
+    registerFlowFile(file, loaded.definition.id)
     definitions.push(loaded.definition)
   }
   return { definitions, errors }

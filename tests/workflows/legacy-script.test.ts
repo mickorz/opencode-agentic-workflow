@@ -215,10 +215,14 @@ return v
 })
 
 test("parallel：可恢复失败（agent 超时）塌缩 null；结构性错误上抛", async () => {
+  // fallback 包一层吸收闸门登记（v1 的显式吸收姿势），同时保住 parallel 返回值
   const source = `export const meta = { name: 'p_test' }
-const results = await parallel([
-  () => agent('好'),
-  () => agent('坏', { timeoutMs: 1 }),
+const results = await fallback([
+  () => parallel([
+    () => agent('好'),
+    () => agent('坏', { timeoutMs: 1 }),
+  ]),
+  () => 'unreachable',
 ])
 return results
 `
@@ -230,11 +234,21 @@ return results
     },
   }
   const { result } = await runV1Script(source, { executor: timeoutExecutor })
-  // 超时分支塌缩 null（v1 语义）；正常分支保留
+  // 超时分支塌缩 null（v1 语义）；正常分支保留；fallback 吸收登记后 run 完成
   assert.deepEqual(result, ["echo:好", null])
 
+  // 不吸收的裸 parallel：run 终检闸门触发（v1 failure-gate 对位）
+  const bare = `export const meta = { name: 'p_test2' }
+const r = await parallel([() => agent('坏', { timeoutMs: 1 })])
+return r
+`
+  await assert.rejects(
+    runV1Script(bare, { executor: timeoutExecutor }),
+    /阶段失败闸门触发/,
+  )
+
   // 结构性错误：整个 parallel 拒绝
-  const structural = `export const meta = { name: 'p_test2' }
+  const structural = `export const meta = { name: 'p_test3' }
 const r = await parallel([() => agent('好')])
 return r
 `
@@ -385,8 +399,83 @@ return r
     executor: echoExecutor(),
     subflow: async (id, args) => ({ runId: "sub_1", output: `${id}:${JSON.stringify(args)}` }),
   })
-  assert.deepEqual(result, { runId: "sub_1", output: 'calc:{"topic":"1+1"}' })
+  // v1 语义：workflow() 返回子流程返回值本体（此处子输出为纯文本 → 字符串）
+  assert.equal(result, 'calc:{"topic":"1+1"}')
   assert.equal(steps[0]!.name, "subflow:calc")
+})
+
+test("workflow：返回值对象还原（v1 的 spec.brief 直取语义）", async () => {
+  const source = `export const meta = { name: 'wf_obj' }
+const spec = await workflow('calc')
+return spec.brief
+`
+  const { result } = await runV1Script(source, {
+    executor: echoExecutor(),
+    subflow: async () => ({ runId: "sub_2", output: JSON.stringify({ brief: "一句话规格" }) }),
+  })
+  assert.equal(result, "一句话规格")
+})
+
+test("workflow：路径形与对象形引用经装载索引解析（脚本一字不改）", async () => {
+  const proj = await fs.mkdtemp(path.join(os.tmpdir(), "agw-legacy-ref-"))
+  const nativeDir = path.join(proj, "scripts", "native")
+  await fs.mkdir(nativeDir, { recursive: true })
+  await fs.writeFile(
+    path.join(proj, "scripts", "util.js"),
+    `export const meta = { name: 'ref_util' }\nreturn 'u'\n`,
+    "utf8",
+  )
+  await fs.writeFile(
+    path.join(nativeDir, "child.js"),
+    `export const meta = { name: 'ref_child', description: '被路径引用的子流程' }\nreturn { tag: args.tag ?? 'none' }\n`,
+    "utf8",
+  )
+  // 镜像真实装载拓扑：scripts/ 根（顶层文件）+ scripts/native/ 根——
+  // 根的父目录（= 工程根）成为解析基准，'./scripts/native/x.js' 由此命中
+  const { definitions, errors } = await loadCustomWorkflows(
+    [path.join(proj, "scripts"), path.join(proj, "scripts", "native")],
+    proj,
+  )
+  assert.deepEqual(errors, [])
+  assert.equal(definitions.length, 2)
+
+  const calls: Array<{ id: string; args: unknown }> = []
+  const { result, steps } = await runV1Script(
+    `export const meta = { name: 'runner' }
+const a = await workflow('./scripts/native/child.js', { tag: 'PATH' })
+const b = await workflow({ scriptPath: './scripts/native/child.js', label: 'B道' }, { tag: 'OBJ' })
+return { a, b }
+`,
+    {
+      executor: echoExecutor(),
+      workspaceRoot: proj,
+      subflow: async (id, args) => {
+        calls.push({ id, args })
+        const tag = (args as { tag?: string } | undefined)?.tag ?? "none"
+        return { runId: `sub_${calls.length}`, output: JSON.stringify({ tag }) }
+      },
+    },
+  )
+  assert.deepEqual(calls.map((c) => c.id), ["ref_child", "ref_child"])
+  assert.deepEqual(result, { a: { tag: "PATH" }, b: { tag: "OBJ" } })
+  assert.deepEqual(
+    steps.map((s) => s.name),
+    ["subflow:ref_child", "subflow:ref_child(B道)"],
+  )
+})
+
+test("workflow：未知引用 fail-loud（列出已试基准）", async () => {
+  const source = `export const meta = { name: 'wf_bad' }
+await workflow('./nope/missing.js')
+return 1
+`
+  await assert.rejects(
+    runV1Script(source, {
+      executor: echoExecutor(),
+      subflow: async (id) => ({ runId: "x", output: id }),
+    }),
+    /找不到对应 flow/,
+  )
 })
 
 test("phase/log/console/setConcurrency：不抛（setConcurrency 响亮警告后忽略）", async () => {
@@ -410,22 +499,135 @@ return info
   }
 })
 
-test("AgentTimeoutError 仍可被脚本自身 try/catch（v1 行为对位）", async () => {
+test("agent 选项治理：未知键 fail-loud；agentType 警告后忽略（v1 降级语义）", async () => {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (msg: string) => warnings.push(msg)
+  try {
+    const unknown = `export const meta = { name: 'opt_bad' }
+await agent('x', { label: 'l', fancyNewOption: 1 })
+return 1
+`
+    await assert.rejects(
+      runV1Script(unknown, { executor: echoExecutor() }),
+      /不支持选项 "fancyNewOption"/,
+    )
+
+    const withType = `export const meta = { name: 'opt_type' }
+const r = await agent('x', { label: 'l', agentType: 'general' })
+return r
+`
+    const ok = await runV1Script(withType, { executor: echoExecutor() })
+    assert.equal(ok.result, "echo:x")
+    assert.equal(warnings.filter((w) => w.includes("agentType")).length, 1)
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test("isolation worktree：git 仓库内 per-call worktree + 提示词注入 + 用后拆除；非 git 降级", async () => {
+  const { execFile } = await import("node:child_process")
+  const { promisify } = await import("node:util")
+  const run = promisify(execFile)
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "agw-legacy-wt-"))
+  await run("git", ["init", "-q"], { cwd: repo })
+  await run("git", ["config", "user.email", "t@t"], { cwd: repo })
+  await run("git", ["config", "user.name", "t"], { cwd: repo })
+  await run("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo })
+
+  const prompts: string[] = []
+  const executor: AgentExecutor = {
+    async execute(task) {
+      prompts.push(task.prompt)
+      return { output: `cwd:${task.cwd ?? "none"}` }
+    },
+  }
+  const source = `export const meta = { name: 'wt_test' }
+const r = await agent('写点东西', { label: '隔离写手', isolation: 'worktree' })
+return r
+`
+  const { result } = await runV1Script(source, { executor, workspaceRoot: repo })
+  // 提示词带 v1 同款工作目录说明；cwd 绑定到 worktree 根
+  assert.match(prompts[0]!, /\[工作目录\].*git worktree/)
+  assert.match(result as string, /^cwd:/)
+  assert.ok(!(result as string).includes("none"))
+  // worktree 已拆除（worktrees 目录下无残留子目录）
+  const wtDir = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`)
+  const leftover = await fs.readdir(wtDir).catch(() => [] as string[])
+  assert.equal(leftover.filter((d) => d.startsWith("legacy-")).length, 0)
+
+  // 非 git 目录：响亮降级共享目录（v1 同款语义），执行不受影响
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (msg: string) => warnings.push(msg)
+  try {
+    const plain = await fs.mkdtemp(path.join(os.tmpdir(), "agw-legacy-nowt-"))
+    const degraded = await runV1Script(source, { executor, workspaceRoot: plain })
+    assert.match(degraded.result as string, /^cwd:none|^cwd:\/.*plain/)
+    assert.equal(warnings.filter((w) => w.includes("worktree 隔离不可用")).length, 1)
+  } finally {
+    console.warn = originalWarn
+  }
+}, { timeout: 30_000 })
+
+test("AgentTimeoutError 顶层塌缩 null + run 终检闸门（v1 语义：可恢复失败不抛）", async () => {
   const source = `export const meta = { name: 'tc_test' }
-let caught = 'none'
-try {
-  await agent('慢', { timeoutMs: 1 })
-} catch (e) {
-  caught = 'caught'
-}
-return caught
+const slow = await agent('慢', { timeoutMs: 1 })
+const tail = await agent('回复固定文本：收尾成功')
+return { slow, tail }
 `
   const timeoutExecutor: AgentExecutor = {
-    async execute() {
-      await new Promise(() => {})
+    async execute(task) {
+      if (task.prompt.includes("慢")) await new Promise(() => {})
+      return { output: "收尾成功" }
+    },
+  }
+  const outcome = await runV1Script(source, { executor: timeoutExecutor }).then(
+    () => ({ ok: true as const }),
+    (e: unknown) => ({ ok: false as const, e }),
+  )
+  // 超时 agent 塌缩 null；同阶段 tail 照常执行；无后续 phase/fallback 吸收 →
+  // run 终检闸门抛「阶段失败闸门触发」（v1 语义）
+  assert.equal(outcome.ok, false)
+  assert.match(String(outcome.e), /阶段失败闸门触发/)
+  void AgentTimeoutError
+})
+
+test("阶段失败闸门：同 phase tail 照常执行，下一 phase() 边界终止（v1 failure_gate 对位）", async () => {
+  const source = `export const meta = { name: 'gate_test' }
+phase('执行')
+const bad = await agent('必超时', { timeoutMs: 1, retries: 0 })
+const tail = await agent('回复固定文本：TAIL-OK')
+phase('汇总')
+return 'unreachable'
+`
+  const timeoutExecutor: AgentExecutor = {
+    async execute(task) {
+      if (task.prompt.includes("必超时")) await new Promise(() => {})
+      return { output: "TAIL-OK" }
+    },
+  }
+  await assert.rejects(
+    runV1Script(source, { executor: timeoutExecutor }),
+    /阶段失败闸门触发/,
+  )
+})
+
+test("阶段失败闸门：fallback 成功吸收（v1 语义），run 正常完成", async () => {
+  const source = `export const meta = { name: 'gate_fb_test' }
+const bad = await agent('必超时', { timeoutMs: 1, retries: 0 })
+const rescued = await fallback([
+  () => check(() => false, '候选一不满足'),
+  () => 'rescued-value',
+])
+return { bad, rescued }
+`
+  const timeoutExecutor: AgentExecutor = {
+    async execute(task) {
+      if (task.prompt.includes("必超时")) await new Promise(() => {})
+      return { output: "x" }
     },
   }
   const { result } = await runV1Script(source, { executor: timeoutExecutor })
-  assert.equal(result, "caught")
-  void AgentTimeoutError
+  assert.deepEqual(result, { bad: null, rescued: "rescued-value" })
 })
