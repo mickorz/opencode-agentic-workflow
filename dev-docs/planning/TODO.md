@@ -2,10 +2,10 @@
 
 ## Agent 侧待办（已确认要做，暂缓——2026-10-09 用户指示「先保存，后面再做」）
 
-1. **批次 C（目标 0.8.0）**：全屏工作流视图 + j/k/Enter/Esc 键盘导航 +
+1. **批次 C（目标 0.9.0）**：全屏工作流视图 + j/k/Enter/Esc 键盘导航 +
    节点 Inspector（v1 nodeview 本体；detail RPC 数据已够用）。
    清单：`dev-docs/research/v1-v2-TUI显示功能对比与补齐清单.md` §5
-2. **批次 D（目标 0.9.0）**：journal 记 prompt 摘要 / attempt / timeout 上限，
+2. **批次 D（目标 0.10.0）**：journal 记 prompt 摘要 / attempt / timeout 上限，
    Inspector 信息补全（重试进度 `(2/3)`、超时 `10s/1m`、缓存回放标记）。
    动持久化格式，需旧 journal 兼容
 3. **小事**：testworkflow 的 `keyword-report.mjs` 汇总行 `undefined` 变量引用
@@ -17,6 +17,11 @@
 > `dev-docs/experience/宿主2.0.26会话作用域slot-主页无挂载点.md`。
 > **批次 C 设计修正**：全屏视图走 `ui.router` 全局路由（session.panel
 > fullscreen 是会话作用域，主页进不去）。
+> **0.8.0 已被占用**（2026-10-09）：v1 脚本（opencode-dynamic-workflows
+> 魔法全局 + 顶层 return）原生装载——用户产品决策「我就是要使用 v1 的 js
+> 不要给我改成 mjs」。实现 `src/workflows/legacy-script.ts` + recorder
+> `appendStep` 动态步骤；dist E2E：v1 examples 的 smoke-test.js 逐字原样
+> 放 flows/ 跑通，journal `smoke_test@1.0.0 · completed · 3 步`。
 
 ## 你侧操作项（Owner: Michael）
 
