@@ -38,6 +38,7 @@ import {
 import {
   renderDetailRows,
   renderDetailSection,
+  renderHomeFooterRows,
   renderPanelRows,
   renderPromptFooterRows,
   renderSessionRows,
@@ -306,6 +307,24 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     },
   })
 
+  // home.footer.status 常驻行（v0.7.1）：宿主 2.0.26 的会话类 slot（sidebar/
+  // prompt.footer/session.panel）都不在主页渲染——主页唯一挂载点，让重启后
+  // 第一屏就有 workflow 痕迹；空板不渲染
+  const offHomeFooter = ctx.ui.slot({
+    append: "home.footer.status",
+    render: () => {
+      const rows = renderHomeFooterRows(runs())
+      if (rows.length === 0) return <></>
+      return (
+        <box flexDirection="row">
+          {rows.map((row, i) => (
+            <RowText key={i} theme={ctx.theme} row={row} />
+          ))}
+        </box>
+      )
+    },
+  })
+
   // /workflow 命令 + 命令面板入口
   // keymap.layer 必须在组件/slot 渲染上下文内调用（宿主 2.0.22 在 setup 顶层调用会抛
   // "Keymap.Provider is missing"）；官方 session.panel 示例用 append:"app" 空渲染挂载。
@@ -336,5 +355,6 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     offSlot()
     offFooter()
     offSidebar()
+    offHomeFooter()
   }
 }

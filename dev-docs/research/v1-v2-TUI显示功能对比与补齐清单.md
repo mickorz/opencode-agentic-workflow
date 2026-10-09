@@ -127,7 +127,11 @@ session.panel fullscreen 均已开放。缺口的根因不是宿主限制，是 
 
 > **进度**：批次 A+B 已随 **0.7.0** 发布（commit a72f652）——主题四档语义色、
 > 头行 N running + token 合计、步骤行 token/模型后缀、prompt.footer 状态条、
-> sidebar 紧凑树。剩余：批次 C（0.8.0）、批次 D（0.9.0）。
+> sidebar 紧凑树。**0.7.1 补 home.footer.status 主页常驻行**（宿主 2.0.26 实测：
+> sidebar/prompt.footer/session.panel 全是会话作用域，主页唯一挂载点是
+> home.footer——坑见 `dev-docs/experience/宿主2.0.26会话作用域slot-主页无挂载点.md`）。
+> 剩余：批次 C（0.8.0，全屏视图须走 ui.router 全局路由而非 session.panel
+> fullscreen）、批次 D（0.9.0）。
 
 - **批次 A（信息密度 + 上色，先做）**：#1-#5。改动集中在 progress-view.ts（行模型
   从 `string[]` 升级为带 tone/粗体的结构行）+ tui.tsx 渲染 + 事件面 steps 加

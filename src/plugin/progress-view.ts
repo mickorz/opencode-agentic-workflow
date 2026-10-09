@@ -265,6 +265,31 @@ export function renderPromptFooterRows(runs: readonly RunProgressSnapshot[]): Pa
 }
 
 /**
+ * home.footer.status 常驻行（v0.7.1：宿主 2.0.26 的 sidebar/prompt.footer/
+ * session.panel 均为会话作用域，主页唯一挂载点）：单行摘要，空板不渲染。
+ * 运行中：`◐ N running · flow@ver`（warning）；否则最近一条 run 摘要（muted）。
+ */
+export function renderHomeFooterRows(runs: readonly RunProgressSnapshot[]): PanelRow[] {
+  const newest = runs[0]
+  if (newest === undefined) return []
+  const running = runs.filter((r) => r.status === "running")
+  if (running.length > 0) {
+    return [
+      {
+        text: `◐ ${running.length} running · ${running[0]!.workflow.id}@${running[0]!.workflow.version}`,
+        tone: "warning",
+      },
+    ]
+  }
+  return [
+    {
+      text: `${runGlyph(newest.status)} ${newest.workflow.id}@${newest.workflow.version} · ${newest.status}`,
+      tone: "muted",
+    },
+  ]
+}
+
+/**
  * sidebar 紧凑树（v0.7.0 批次 B，v1 sidebar_content 对位）：
  * 与面板同源的行模型，窄宽度默认截断；行数预算防长侧栏。
  */

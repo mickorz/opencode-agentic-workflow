@@ -11,6 +11,7 @@ import {
   formatDuration,
   renderDetailRows,
   renderDetailSection,
+  renderHomeFooterRows,
   renderPanelRows,
   renderPromptFooterRows,
   renderSessionRows,
@@ -236,6 +237,23 @@ test("renderPromptFooterRows: 仅运行中 run；done/total + running 摘要", (
     ],
   )
   assert.deepEqual(renderPromptFooterRows([snapshot({ runId: "x", status: "completed" })]), [])
+})
+
+test("renderHomeFooterRows: 主页常驻行——空板不渲染；运行中优先；否则最近 run 摘要", () => {
+  assert.deepEqual(renderHomeFooterRows([]), [])
+  // 运行中：warning 色 + 数量 + 流程名（多个 running 取最新一条的名）
+  const running = renderHomeFooterRows([
+    snapshot({ runId: "r_new", status: "running" }),
+    snapshot({ runId: "r_old", status: "running", startedAt: 1_000 }),
+  ])
+  assert.deepEqual(running, [
+    { text: "◐ 2 running · feature-development@1.0.0", tone: "warning" },
+  ])
+  // 无运行：最近 run 单行摘要（muted）
+  const idle = renderHomeFooterRows([
+    snapshot({ status: "completed", completedAt: 9_000 }),
+  ])
+  assert.deepEqual(idle, [{ text: "✓ feature-development@1.0.0 · completed", tone: "muted" }])
 })
 
 test("renderSidebarRows: 空板占位；行数预算截断带提示", () => {
