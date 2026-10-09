@@ -1,16 +1,20 @@
 ---
 name: workflow-authoring
 description: >
-  编写与自定义 opencode-agentic-workflow 声明式流程时加载。当用户想定义/创建一个
-  workflow、把某个重复流程自动化、给现有流程加步骤或参数、或遇到 workflow_define
-  版本冲突与校验报错时使用。覆盖：需求澄清、声明式 JSON 构造、workflow_define
-  落盘注册、workflow 工具试跑验证的完整链路。
+  编写与自定义 opencode-agentic-workflow 代码流程（JS 模块）时加载。当用户想
+  定义/创建一个 workflow、把某个重复流程自动化、给现有流程加步骤或参数、
+  或遇到流程装载报错与版本冲突时使用。覆盖：需求澄清、flows 目录 JS 模块
+  编写、装载注册、workflow 工具试跑验证的完整链路。
 ---
 
-# workflow-authoring（声明式流程编写）
+# workflow-authoring（代码流程编写）
 
-把用户的流程需求变成可复用的声明式 workflow：**对话澄清 → 构造 JSON →
-`workflow_define` 落盘注册 → `workflow` 工具试跑**。全程无需人工编辑文件。
+把用户的流程需求变成可复用的代码 workflow：**对话澄清 → 写 flows 目录
+JS 模块 → 装载注册 → `workflow` 工具试跑**。
+
+> v0.6.0 起声明式 JSON 流程已移除（`workflow_define` 工具同步下线），
+> 自定义流程只有代码形态。历史 JSON 用 `@mickorz/opencode-agentic-workflow/core`
+> API 改写（文末有映射表）。
 
 ## 第一步：澄清需求（缺什么问什么，别猜）
 
@@ -19,93 +23,120 @@ description: >
 3. **参数**：除了主题 topic，还要哪些输入？（受众、语言、深度、评审标准…）
 4. **完成标准**：最后一步之后怎么判断成功？
 
-## 第二步：构造声明式 JSON
+## 第二步：写 JS 模块（flows 目录）
 
-```json
-{
-  "id": "kebab-case-短名",
-  "version": "1.0.0",
-  "description": "一句话说明（进工具清单，给未来的你/agent 看）",
-  "args": {
-    "type": "object",
-    "properties": {
-      "topic": { "type": "string", "description": "主题" },
-      "audience": { "type": "string", "description": "受众" }
+位置：项目 `flows/` 目录（缺省自动装载，零配置）；或 `opencode.json` 插件
+options 里 `workflows: ["<路径>"]` 显式指定（文件或目录，相对项目根）。
+扩展名 `.mjs` 推荐（`.js`/`.cjs` 也支持；引用核心 API 的 `.cjs` 会明确报错）。
+
+```js
+// flows/release-notes.mjs
+import {
+  defineWorkflow, agent, checkpoint, verify, assert, fileExists,
+} from "@mickorz/opencode-agentic-workflow/core"
+
+export default defineWorkflow({
+  id: "release-notes",
+  version: "1.0.0",
+  description: "一句话说明（进工具清单，给未来的你/agent 看）",
+  argsSchema: {
+    type: "object",
+    properties: {
+      topic: { type: "string", description: "主题" },
+      audience: { type: "string", description: "受众" },
     },
-    "required": ["topic"]
+    required: ["topic"],
   },
-  "steps": [
-    {
-      "name": "draft",
-      "agent": "针对 {{topic}} 为 {{args.audience}} 写初稿…。禁止调用 workflow / workflow_metrics 工具。完成后只回复 done。",
-      "model": "glm/glm-5.3-flash",
-      "timeoutMs": 300000,
-      "retries": 1
-    },
-    { "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "要点完整且有结论" } },
-    { "name": "gate", "checkpoint": "「{{topic}}」初稿已生成，批准？" },
-    { "name": "file", "fileExists": "out.md" }
-  ],
-  "output": "定稿：{{steps.draft}}"
-}
+  stepNames: ["draft", "review", "gate"],   // 静态声明：journal/resume 依赖步骤序号稳定
+  async run(args, ctx) {
+    const state = await ctx.runSteps([     // runSteps = journal 记录 + resume 前缀跳过的统一入口
+      async () => ({
+        draft: (await agent(
+          `针对 ${args.topic} 为 ${args.audience ?? "团队"} 写初稿…` +
+          "。禁止调用 workflow / workflow_metrics 工具。完成后只回复 done。",
+          { model: "glm/glm-5.3-flash", timeoutMs: 300000, retries: 1 },
+        )).output,
+      }),
+      async () => ({ review: (await verify(args.topic, { criteria: "要点完整且有结论", reviewers: 2 })).passed ? "ok" : "ng" }),
+      async () => { await checkpoint(`「${args.topic}」初稿已生成，批准？`) },
+    ])
+    return { output: `定稿：${state.draft}` }
+  },
+})
 ```
 
-**步骤七类**（每步恰好一个步骤键）：`agent`（子 agent）、`checkpoint`（人工
-审批门）、`verify`（语义评审；可加 `threshold` 投票与 `lenses` 多视角）、
-`fileExists`（文件存在断言，相对项目根）、`subflow`（嵌套另一个已注册
-workflow；`"subflow": "flow-id"` + 可选 `args` 对象（原始值或模板）；需要
-journalDir；嵌套深度上限 3；子 run 的输出进 `{{steps.<名>}}`，子 run 失败按
-普通步骤失败处理）、`pipeline`（条目并发 fan-out：`"pipeline": "提示模板"`
-（`{{item}}` 引用条目）+ `items` 非空模板数组 + 可选 `outputAs`/`onFailure`/
-`model`/`timeoutMs`/`retries`；结果数组与 items 对齐，`{{steps.<名>}}` 得
-JSON 串）、`race`（多提示竞速：`"race": ["模板A", "模板B"]` ≥2 并发起跑
-首个成功者胜出 + 可选 `outputAs`；全败报错）。pipeline/race 各占一个
-resume 单元：中断重跑整步（条目级断点不支持，需要就拆 subflow 步）。
+**核心 API**（全部从 `@mickorz/opencode-agentic-workflow/core` 导入；
+装载器会自动把该裸说明符重写为本插件实例——用户目录无需 npm 安装本包）：
+
+- `agent(prompt, opts?)` → `{ output, structured? }`；opts：`model`
+  （"providerID/modelId"）/ `timeoutMs` / `retries` / `retryDelayMs` /
+  `schema`（JSON-Schema 结构化输出）
+- `checkpoint(message)`：人工审批门——拒绝即抛错中断；headless 传
+  `checkpointMode: "auto-approve"`
+- `verify(artifact, { criteria?, reviewers?, passThreshold?, lenses? })` →
+  `{ passed, verdicts }`：语义评审；lenses = 多视角各一票
+- `assert(() => fileExists("out.md"), "out.md")`：确定性断言（另有
+  `commandSuccess` / `isFile` / `isDirectory`）
+- 组合子：`pipeline`（条目并发 fan-out）/ `race`（竞速首胜）/ `parallel` /
+  `sequence` / `fallback` / `retry` / `phase`
+- `ctx.runSteps([...])`：编排入口——每个元素一个步骤函数，返回的部分
+  state 会累积合并；journal 记录 + resume 跳过已完成前缀都由它管
 
 **必守纪律（违反 = 事故）**：
 
 1. 每个 `agent` prompt **必须以「禁止调用 workflow / workflow_metrics 工具」
    收尾**——子 agent 递归调工作流会自饿死并发信号量
-2. 模板变量只有 `{{topic}}`、`{{args.x}}`、`{{steps.<前步名>}}`（pipeline
-   提示内另有 `{{item}}`）；未知变量 = 该步失败（fail-loud，绝不静默空串）
-3. `args` 里声明过的参数才能在 prompt 里引用；`topic` 恒有（工具自动传）
-4. `agent` 步可选 `model`（"providerID/modelId"）/ `timeoutMs`（正数毫秒）/
-   `retries`（非负整数）——只在 agent 与 pipeline 步合法（race 仅 outputAs）
-5. 改动已注册流程的步骤内容 = **必须升 version**（1.0.0 → 1.1.0）；旧版本
-   journal 的 resume 依赖精确版本解析
-6. `id` 不得用内置名：smoke / reliable / artifact / feature-development
+2. `args` 里用到的参数都要在 `argsSchema.properties` 声明；`topic` 恒有
+   （工具自动传）
+3. 改动已注册流程的步骤结构（stepNames 数量/顺序/语义）= **必须升
+   version**（1.0.0 → 1.1.0）；旧 journal 的 resume 依赖精确版本解析
+4. `id` 不得用内置名：smoke / reliable / artifact / feature-development
+5. 模块只能用 ESM 语法导出（`export default` 或 `export const definition`）
 
-## 第三步：workflow_define 落盘注册
+## 第三步：装载注册
 
-调用 `workflow_define` 工具，输入刚构造的 `workflow` 对象。结果语义：
+保存文件后**重启 opencode**（装载发生在插件初始化）。验证：
 
-- 成功：返回 `defined <id>@<version>` 与落盘路径，**立即可用**（无需重启）
-- 「already defined (identical)」：内容相同，幂等成功，直接用
-- 「already registered with DIFFERENT content」：同版本不同内容——升 version
-  再 define
-- 校验报错：逐字段指名，按报错修 JSON 再试
+- 启动日志（或 `~/.local/share/opencode/log/opencode.log`）出现
+  `custom workflow registered: <id>@<version>`
+- 报错行 `custom workflow file skipped: <文件>: <原因>` 逐一指名——按报错
+  修文件再重启
+
+同 id@version 重复定义：目录内多文件冲突会跳过后者并告警；改结构必须升
+version。
 
 ## 第四步：试跑验证
 
 调用 `workflow` 工具：`flow=<id>, topic=<真实小主题>, checkpointMode=auto-approve`
 （headless 必传）。关注：
 
-- 步骤是否全 completed；失败步的报错（模板变量/文件路径/评审否决）
+- 步骤是否全 completed；失败步的报错（参数缺失/文件路径/评审否决）
 - 产物是否落盘、内容是否符合预期
 - 有 `background: true` 需求时用 `workflow_control status` 轮询
 
 试跑通过后向用户报告：流程 id、参数用法（含 args 清单）、一句话示例。
 
+## JSON → JS 迁移映射
+
+| 旧 JSON 步骤 | 代码写法 |
+|------|------|
+| `{ agent: "提示 {{topic}}" }` | `agent(\`提示 ${args.topic}\`)` |
+| `{ checkpoint: "批准？" }` | `await checkpoint("批准？")` |
+| `{ verify: { artifact, criteria } }` | `await verify(artifact, { criteria })` |
+| `{ fileExists: "out.md" }` | `await assert(() => fileExists("out.md"), "out.md")` |
+| `{ pipeline: "模板 {{item}}", items }` | `await pipeline(items, [async (item) => (await agent(\`模板 ${item}\`)).output])` |
+| `{ race: ["A", "B"] }` | `race([() => agent("A"), () => agent("B")])` |
+| `"output": "{{steps.draft}}"` | run 末尾 `return { output: state.draft }` |
+
 ## 常见报错速查
 
 | 报错 | 原因与修法 |
 |------|-----------|
-| `must have exactly one of agent/checkpoint/verify/fileExists/subflow/pipeline/race` | 一步给了两个步骤键，或忘了给 |
-| `items must be a non-empty array of non-empty string templates` | pipeline 步缺 items 或混入非字符串/空串 |
-| `race must be an array of at least 2 non-empty prompt templates` | race 步分支少于 2 或有空提示（单分支无竞速意义） |
-| `subflow step "..." requires the journalDir` | subflow 需要插件配置 journalDir（lineage 落盘）；配置后重试 |
-| `subflow nesting too deep` | 嵌套超 3 层；拍平组合方式 |
-| `template variable {{...}} is not provided` | 调用没传该参数，或 args 没声明 |
-| `already registered with DIFFERENT content` | 升 version 再 workflow_define |
+| `failed to import (...Cannot find package...)` | 模块导入了用户目录解析不到的包；只用 `@mickorz/opencode-agentic-workflow/core` 与 Node 内置模块 |
+| `imports ".../core" but .cjs cannot be specifier-rewritten` | `.cjs` 引用核心 API——改名 `.mjs` |
+| `module must export a workflow` | 缺 `export default defineWorkflow({...})` |
+| `workflow.run must be a function` | 定义缺 `async run(args, ctx)` |
+| `JSON workflows were removed in v0.6.0` | flows 目录里还有 .json——按上面映射表改写成 JS |
 | `id "..." is reserved by a built-in` | 换个 id |
-| verify 步 `fail` | 评审语义否决——改产物质量或放宽 criteria，不是 bug |
+| `duplicate <id>@<version>` | 同版本已从别的文件装载——删一处或升 version |
+| verify 返回 `passed: false` | 评审语义否决——改产物质量或放宽 criteria，不是 bug |

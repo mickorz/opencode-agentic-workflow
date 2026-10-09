@@ -26,6 +26,17 @@ npm version <patch|minor> && git push --follow-tags
 > `opencode run`（role=server），从未覆盖 role=cli。0.5.1 修复
 > keymap 挂载点 + opentui/solid-js 改 peer 打包。**P 组用例请在 0.5.1
 > 上执行**；I-1 记录的安装体验不受影响。
+>
+> **0.5.2（2026-10-09）**：TUI 面板对齐 v1 默认行为——新 run 启动自动打开
+> （每 runId 一次；手动关闭后本 run 不再打扰）。
+>
+> **0.6.0（2026-10-09）产品决策**：声明式 JSON 流程 + `workflow_define`
+> 下线，自定义流程只留代码（JS 模块）形态；顺带修复 `<pkg>/core` 裸说明符
+> 在用户目录解析不了的 P2-14 文档债（装载器重写为插件自身绝对路径），
+> 并给 flows/ 目录零配置缺省装载。坑与决策：
+> `dev-docs/experience/声明式JSON下线与core裸说明符解析坑.md`。
+> **P 组后续用例在 0.6.0 上执行**；旧 JSON 流程需改写为 .mjs（skill 内
+> 有映射表）。
 
 面板渲染 + 安装器交互路径手动验收——清单已备好：
 `dev-docs/planning/手动验收-面板与安装器.md`（P-1…P-8 面板 / I-1…I-9 安装器）

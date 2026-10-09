@@ -7,7 +7,6 @@ import { test } from "node:test"
 
 import { setExecutor } from "../../src/runtime/engine.js"
 import { verify } from "../../src/quality/verify.js"
-import { validateWorkflow } from "../../src/workflows/loader.js"
 
 const PASS = JSON.stringify({ verdict: "pass", summary: "没问题", issues: [] })
 const FAIL = JSON.stringify({ verdict: "fail", summary: "有缺陷", issues: ["缺测试"] })
@@ -103,55 +102,4 @@ test("lenses 全票默认：一个视角 fail -> 整体拒绝", async () => {
   setExecutor(executor)
   const result = await verify("artifact", { lenses: LENSES })
   assert.equal(result.passed, false)
-})
-
-// ── 声明式校验与透传 ────────────────────────────────────────────────────
-
-test("声明式 verify 步：threshold/lenses 合法通过、非法逐一指名", () => {
-  const ok = validateWorkflow(
-    {
-      id: "v-flow",
-      steps: [
-        {
-          name: "review",
-          verify: {
-            artifact: "{{steps.draft}}",
-            threshold: 0.5,
-            lenses: [{ name: "correctness", criteria: "论断准确" }],
-          },
-        },
-      ],
-    },
-    "v.json",
-  )
-  assert.equal(ok.ok, true)
-
-  const badThreshold = validateWorkflow(
-    { id: "v", steps: [{ name: "r", verify: { artifact: "a", threshold: 1.2 } }] },
-    "v.json",
-  )
-  assert.equal(badThreshold.ok, false)
-  if (!badThreshold.ok) assert.match(badThreshold.error, /threshold must be a number in \(0, 1\]/)
-
-  const badLens = validateWorkflow(
-    {
-      id: "v",
-      steps: [{ name: "r", verify: { artifact: "a", lenses: [{ name: "x" }] } }],
-    },
-    "v.json",
-  )
-  assert.equal(badLens.ok, false)
-  if (!badLens.ok) assert.match(badLens.error, /lenses\[0\] must be/)
-
-  const unknownLensKey = validateWorkflow(
-    {
-      id: "v",
-      steps: [
-        { name: "r", verify: { artifact: "a", lenses: [{ name: "x", criteria: "y", weight: 2 }] } },
-      ],
-    },
-    "v.json",
-  )
-  assert.equal(unknownLensKey.ok, false)
-  if (!unknownLensKey.ok) assert.match(unknownLensKey.error, /lenses\[0\] has unknown key "weight"/)
 })

@@ -1,9 +1,9 @@
 /**
- * 声明式 workflow 装载器测试（P4）
- * 覆盖：入口展开（文件/目录/不存在/空目录）、校验全分支（顶层/步骤/
- * verify 形态）、reservedIds 与同文件重复、模板解析（topic/args/steps/
- * 未知变量）、run 行为（agent+checkpoint+fileExists 全链、output 模板、
- * 缺省 output、fileExists 相对 workspaceRoot）
+ * 代码 workflow 装载器测试（P2-14 + v0.6.0 JS-only）
+ * 覆盖：三导出形态、模块内自定义逻辑、坏形状逐一跳过（无导出/缺 id/
+ * 缺 run/import 失败/reserved/重复 id@version）、目录扫描与空目录文案、
+ * <pkg>/core 裸说明符重写（无 node_modules 的用户目录可解析、相对导入
+ * 保留、.cjs 明确报错、临时文件清理）、.json 移除提示
  */
 
 import assert from "node:assert/strict"
@@ -12,565 +12,19 @@ import os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 
-import {
-  loadDeclarativeWorkflows,
-  resolveTemplate,
-  toDefinition,
-  validateWorkflow,
-} from "../../src/workflows/loader.js"
-import { setExecutor } from "../../src/runtime/engine.js"
-import { sequence } from "../../src/workflow/sequence.js"
-import type { AgentExecutor, AgentTask } from "../../src/runtime/executor.js"
-import { setCheckpointGate } from "../../src/quality/checkpoint.js"
-import { PolicyCheckpointGate } from "../../src/plugin/policy-checkpoint-gate.js"
-
-/** echo executor：记录 prompt，返回 prompt 尾段 */
-class EchoExecutor implements AgentExecutor {
-  readonly prompts: string[] = []
-  async execute(task: AgentTask) {
-    this.prompts.push(task.prompt)
-    return { output: `echo:${task.prompt.slice(0, 30)}` }
-  }
-}
+import { loadCustomWorkflows } from "../../src/workflows/loader.js"
 
 let baseDir: string
 
 test.before(async () => {
   baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-loader-"))
-  setCheckpointGate(new PolicyCheckpointGate("auto-approve"))
 })
 
-async function writeWorkflow(name: string, content: unknown): Promise<string> {
+async function writeWorkflow(name: string, content: string): Promise<string> {
   const file = path.join(baseDir, name)
-  await fs.writeFile(file, typeof content === "string" ? content : JSON.stringify(content))
+  await fs.writeFile(file, content)
   return file
 }
-
-/** 最小合法声明 */
-const valid = {
-  id: "release-notes",
-  version: "1.0.0",
-  description: "test flow",
-  steps: [
-    { name: "draft", agent: "为 {{topic}} 起草" },
-    { name: "gate", checkpoint: "批准 {{topic}}？" },
-    { name: "check", fileExists: "notes.md" },
-  ],
-  output: "OUT: {{steps.draft}}",
-}
-
-test("run：自定义 args（audience）注入模板（P0-1 args 可达性）", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  const workDir = await fs.mkdtemp(path.join(baseDir, "ws-args-"))
-
-  const flow = {
-    ...valid,
-    id: "digest",
-    args: {
-      type: "object",
-      properties: {
-        topic: { type: "string" },
-        audience: { type: "string", description: "目标读者" },
-      },
-      required: ["topic", "audience"],
-    },
-    steps: [
-      { name: "draft", agent: "为 {{topic}} 写速览，目标读者：{{args.audience}}" },
-      { name: "gate", checkpoint: "批准 {{topic}}？" },
-    ],
-    output: "OUT",
-  }
-  await writeWorkflow("args-flow.json", flow)
-  const { definitions } = await loadDeclarativeWorkflows([path.join(baseDir, "args-flow.json")], baseDir)
-
-  const { output } = await runDefinition(definitions[0]!, { topic: "状态机", audience: "中学生" }, workDir)
-  assert.equal(output, "OUT")
-  // agent prompt 同时注入了 topic 与自定义 args.audience
-  assert.match(echo.prompts[0]!, /为 状态机 写速览/)
-  assert.match(echo.prompts[0]!, /目标读者：中学生/)
-})
-
-test("装载：合法文件转换为 definition（stepNames/描述/缺省 argsSchema）", async () => {
-  await writeWorkflow("ok.json", valid)
-  const { definitions, errors } = await loadDeclarativeWorkflows(
-    [path.join(baseDir, "ok.json")],
-    baseDir,
-  )
-  assert.deepEqual(errors, [])
-  assert.equal(definitions.length, 1)
-  const def = definitions[0]!
-  assert.equal(def.id, "release-notes")
-  assert.equal(def.version, "1.0.0")
-  assert.deepEqual(def.stepNames, ["draft", "gate", "check"])
-  assert.deepEqual((def.argsSchema as { required?: string[] }).required, ["topic"])
-})
-
-test("装载：目录入口扫描一层 *.json（排序）；相对路径基于 baseDir", async () => {
-  const dir = path.join(baseDir, "flows")
-  await fs.mkdir(dir)
-  await writeWorkflow(path.join("flows", "b-second.json"), { ...valid, id: "b-second" })
-  await writeWorkflow(path.join("flows", "a-first.json"), { ...valid, id: "a-first" })
-  await fs.writeFile(path.join(dir, "readme.txt"), "not json")
-  const { definitions, errors } = await loadDeclarativeWorkflows(["flows"], baseDir)
-  assert.deepEqual(errors, [])
-  assert.deepEqual(definitions.map((d) => d.id).sort(), ["a-first", "b-second"])
-})
-
-test("装载：文件级错误全部跳过不阻断（不存在/坏 JSON/校验失败/reserved/重复）", async () => {
-  await writeWorkflow("broken.json", "{ not json")
-  await writeWorkflow("bad-id.json", { ...valid, id: "Bad_Id" })
-  await writeWorkflow("no-steps.json", { id: "no-steps" })
-  await writeWorkflow("builtin.json", { ...valid, id: "artifact", steps: [{ name: "x", agent: "y" }] })
-  const dupFile = await writeWorkflow("dup.json", { id: "dup-flow", steps: [{ name: "x", agent: "y" }] })
-  await writeWorkflow("dup2.json", { id: "dup-flow", steps: [{ name: "x", agent: "y" }] })
-  const { definitions, errors } = await loadDeclarativeWorkflows(
-    [
-      "missing-dir",
-      path.join(baseDir, "broken.json"),
-      path.join(baseDir, "bad-id.json"),
-      path.join(baseDir, "no-steps.json"),
-      path.join(baseDir, "builtin.json"),
-      path.join(baseDir, "dup.json"),
-      path.join(baseDir, "dup2.json"),
-    ],
-    baseDir,
-    ["artifact"],
-  )
-  const ids = definitions.map((d) => d.id)
-  assert.ok(ids.includes("dup-flow")) // 第一份 dup 合法注册
-  assert.equal(ids.filter((i) => i === "dup-flow").length, 1)
-  assert.equal(definitions.length, 1)
-  const joined = errors.join("\n")
-  assert.match(joined, /missing-dir: no such file/)
-  assert.match(joined, /broken\.json: invalid JSON/)
-  assert.match(joined, /bad-id\.json: "id" must match/)
-  assert.match(joined, /no-steps\.json: "steps" must be a non-empty array/)
-  assert.match(joined, /builtin\.json: id "artifact" is reserved/)
-  assert.match(joined, /dup2\.json: duplicate dup-flow@1\.0\.0/)
-})
-
-test("校验：步骤键互斥与未知键", async () => {
-  const cases: Array<[string, unknown, RegExp]> = [
-    ["both-keys.json", { id: "x-flow", steps: [{ name: "s", agent: "a", checkpoint: "c" }] }, /exactly one of/],
-    ["no-key.json", { id: "x-flow", steps: [{ name: "s" }] }, /exactly one of/],
-    ["unknown-step-key.json", { id: "x-flow", steps: [{ name: "s", agent: "a", temperature: 0.7 }] }, /unknown key\(s\) \[temperature\]/],
-    ["unknown-top-key.json", { id: "x-flow", hooks: true, steps: [{ name: "s", agent: "a" }] }, /unknown top-level key "hooks"/],
-    ["verify-shape.json", { id: "x-flow", steps: [{ name: "s", verify: { criteria: "x" } }] }, /verify must be/],
-  ]
-  for (const [name, content, pattern] of cases) {
-    await writeWorkflow(name, content)
-    const { definitions, errors } = await loadDeclarativeWorkflows([path.join(baseDir, name)], baseDir)
-    assert.equal(definitions.length, 0, `${name} 应被拒`)
-    assert.match(errors[0]!, pattern)
-  }
-})
-
-test("模板：topic / args.x / steps.<name> 解析；未知变量逐一报错", () => {
-  const outputs = new Map([["draft", "DRAFT-TEXT"]])
-  assert.equal(resolveTemplate("{{topic}} | {{ args.x }} | {{steps.draft}}", { topic: "T", x: 42 }, outputs), "T | 42 | DRAFT-TEXT")
-  assert.equal(resolveTemplate("无变量原样通过", {}, outputs), "无变量原样通过")
-  assert.throws(() => resolveTemplate("{{topic}}", {}, outputs), /\{\{topic\}\} is not provided/)
-  assert.throws(() => resolveTemplate("{{args.missing}}", {}, outputs), /args\.missing/)
-  assert.throws(() => resolveTemplate("{{steps.other}}", {}, outputs), /steps\.other.*available step outputs: \[draft\]/)
-  assert.throws(() => resolveTemplate("{{workspace}}", {}, outputs), /unknown template variable/)
-})
-
-/** 以 stub ctx 跑 definition.run（runSteps = 真实 sequence） */
-async function runDefinition(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  definition: any,
-  args: Record<string, unknown>,
-  workspaceRoot: string,
-): Promise<{ output: string; state: Record<string, unknown> | undefined }> {
-  let state: Record<string, unknown> | undefined
-  const ctx = {
-    workspaceRoot,
-    runSteps: async (steps: Array<(prev?: Record<string, unknown>) => Promise<Record<string, unknown>>>, options?: { stepNames?: string[] }) => {
-      state = await sequence(steps, options as { stepNames?: string[] })
-      return state
-    },
-  }
-  const result = await definition.run(args, ctx)
-  return { output: result.output, state }
-}
-
-test("run：agent→checkpoint→fileExists 全链（模板注入 prompt、缺省 root 解析、output 模板）", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  const workDir = await fs.mkdtemp(path.join(baseDir, "ws-"))
-  await fs.writeFile(path.join(workDir, "notes.md"), "content")
-
-  await writeWorkflow("run-flow.json", valid)
-  const { definitions } = await loadDeclarativeWorkflows([path.join(baseDir, "run-flow.json")], baseDir)
-  const { output, state } = await runDefinition(definitions[0]!, { topic: "T1" }, workDir)
-
-  // agent prompt 注入了 {{topic}}
-  assert.match(echo.prompts[0]!, /为 T1 起草/)
-  // output 模板使用了 agent 步输出
-  assert.match(output, /^OUT: echo:/)
-  // 状态累积：三步各留键，fileExists 步记录绝对路径
-  assert.equal(state?.gate, "approved")
-  assert.match(String(state?.check), /notes\.md$/)
-})
-
-test("run：缺省 output = 最后一个 agent 步输出；无 agent 步时为完成文案", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  await writeWorkflow(
-    "default-out.json",
-    { id: "default-out", steps: [{ name: "only", agent: "做点事" }] },
-  )
-  const d1 = (await loadDeclarativeWorkflows([path.join(baseDir, "default-out.json")], baseDir)).definitions[0]!
-  const r1 = await runDefinition(d1, { topic: "T" }, baseDir)
-  assert.match(r1.output, /^echo:/)
-
-  await writeWorkflow(
-    "no-agent.json",
-    { id: "no-agent", steps: [{ name: "gate", checkpoint: "批" }] },
-  )
-  const d2 = (await loadDeclarativeWorkflows([path.join(baseDir, "no-agent.json")], baseDir)).definitions[0]!
-  const r2 = await runDefinition(d2, { topic: "T" }, baseDir)
-  assert.equal(r2.output, "workflow no-agent completed")
-})
-
-test("run：fileExists 在 workspaceRoot 下不存在 → 步骤失败；模板缺变量 → 步骤失败", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  const emptyDir = await fs.mkdtemp(path.join(baseDir, "empty-"))
-  await writeWorkflow("run-flow2.json", valid)
-  const def = (await loadDeclarativeWorkflows([path.join(baseDir, "run-flow2.json")], baseDir)).definitions[0]!
-  await assert.rejects(() => runDefinition(def, { topic: "T" }, emptyDir), /notes\.md exists in workspace/)
-
-  // 缺 topic：第一步模板就应报错（清晰指出变量名）
-  await writeWorkflow("need-args.json", {
-    id: "need-args",
-    steps: [{ name: "s", agent: "主题是 {{args.subject}}" }],
-  })
-  const def2 = (await loadDeclarativeWorkflows([path.join(baseDir, "need-args.json")], baseDir)).definitions[0]!
-  await assert.rejects(() => runDefinition(def2, {}, emptyDir), /args\.subject.*is not provided/)
-})
-
-test("P2-9 校验：subflow 步合法（args 原始值/模板混合）；未知键/坏 args 拒绝", async () => {
-  await writeWorkflow("sub-ok.json", {
-    id: "sub-ok",
-    steps: [
-      { name: "prep", agent: "准备 {{topic}}" },
-      { name: "child", subflow: "child-flow", args: { topic: "{{topic}}", count: 3, flag: true } },
-    ],
-  })
-  const ok = await loadDeclarativeWorkflows([path.join(baseDir, "sub-ok.json")], baseDir)
-  assert.equal(ok.errors.length, 0)
-  assert.equal(ok.definitions[0]?.id, "sub-ok")
-
-  // args 非对象
-  await writeWorkflow("sub-bad-args.json", {
-    id: "sub-bad-args",
-    steps: [{ name: "child", subflow: "c", args: ["nope"] }],
-  })
-  const bad1 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-args.json")], baseDir)
-  assert.match(bad1.errors[0] ?? "", /args must be an object/)
-
-  // args 值类型非法
-  await writeWorkflow("sub-bad-val.json", {
-    id: "sub-bad-val",
-    steps: [{ name: "child", subflow: "c", args: { nested: { deep: 1 } } }],
-  })
-  const bad2 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-val.json")], baseDir)
-  assert.match(bad2.errors[0] ?? "", /args\.nested must be a string/)
-
-  // subflow 步上放了 agent 专属键
-  await writeWorkflow("sub-bad-key.json", {
-    id: "sub-bad-key",
-    steps: [{ name: "child", subflow: "c", model: "glm/x" }],
-  })
-  const bad3 = await loadDeclarativeWorkflows([path.join(baseDir, "sub-bad-key.json")], baseDir)
-  assert.match(bad3.errors[0] ?? "", /unknown key\(s\) \[model\]/)
-})
-
-test("P2-9 执行：subflow 步模板解析 + 输出进 {{steps.child}}", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  await writeWorkflow("sub-run.json", {
-    id: "sub-run",
-    steps: [
-      { name: "prep", agent: "准备 {{topic}}" },
-      { name: "child", subflow: "child-flow", args: { topic: "子任务-{{topic}}" } },
-      { name: "after", agent: "总结：{{steps.child}}" },
-    ],
-  })
-  const def = (await loadDeclarativeWorkflows([path.join(baseDir, "sub-run.json")], baseDir)).definitions[0]!
-
-  const calls: Array<{ id: string; args: Record<string, unknown> }> = []
-  let state: Record<string, unknown> | undefined
-  const ctx = {
-    workspaceRoot: baseDir,
-    subflow: async (id: string, args: Record<string, unknown>) => {
-      calls.push({ id, args })
-      return { runId: "run_child", output: `child-done(${String(args.topic)})` }
-    },
-    runSteps: async (steps: Array<(prev?: Record<string, unknown>) => Promise<Record<string, unknown>>>, options?: { stepNames?: string[] }) => {
-      state = await sequence(steps, options as { stepNames?: string[] })
-      return state
-    },
-  }
-  const result = await def.run({ topic: "T9" }, ctx)
-
-  // 模板注入 subflow args；输出回流 steps 模板
-  assert.deepEqual(calls, [{ id: "child-flow", args: { topic: "子任务-T9" } }])
-  assert.equal(state?.child, "child-done(子任务-T9)")
-  assert.match(echo.prompts[1]!, /总结：child-done/)
-
-  // output 缺省取最后一个 agent 步（含 subflow 输出注入）
-  assert.match(result.output, /^echo:/)
-})
-
-test("P2-9 执行：ctx.subflow 缺失（未配 journalDir）→ 清晰报错", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  await writeWorkflow("sub-nostore.json", {
-    id: "sub-nostore",
-    steps: [{ name: "child", subflow: "child-flow" }],
-  })
-  const def = (await loadDeclarativeWorkflows([path.join(baseDir, "sub-nostore.json")], baseDir)).definitions[0]!
-  const ctx = {
-    workspaceRoot: baseDir,
-    runSteps: async (steps: Array<(prev?: Record<string, unknown>) => Promise<Record<string, unknown>>>) => {
-      return sequence(steps as never)
-    },
-  }
-  await assert.rejects(() => def.run({}, ctx), /subflow step "child" requires the journalDir/)
-})
-
-// ---------------------------------------------------------------------------
-// 声明式 pipeline / race（并发步骤进 JSON）
-
-test("校验: pipeline 步合法形状通过；items/payload/onFailure/outputAs 各自把关", () => {
-  const ok = validateWorkflow(
-    {
-      id: "pipe-flow",
-      steps: [
-        {
-          name: "fanout",
-          pipeline: "分析 {{item}}（主题 {{topic}}）",
-          items: ["{{topic}}-甲", "{{topic}}-乙"],
-          outputAs: "reports",
-          onFailure: "continue",
-          model: "glm/glm-5.3-flash",
-          timeoutMs: 60000,
-          retries: 1,
-        },
-      ],
-    },
-    "pipe.json",
-  )
-  assert.equal(ok.ok, true)
-})
-
-test("校验: pipeline 步各失效形状逐一拒绝", () => {
-  const cases: Array<{ step: Record<string, unknown>; match: RegExp }> = [
-    { step: { name: "f", pipeline: "p {{item}}" }, match: /items must be a non-empty array/ },
-    { step: { name: "f", pipeline: "p {{item}}", items: [] }, match: /items must be a non-empty array/ },
-    { step: { name: "f", pipeline: "p {{item}}", items: ["a", 3] }, match: /items must be a non-empty array/ },
-    { step: { name: "f", pipeline: "", items: ["a"] }, match: /pipeline must be a non-empty string/ },
-    { step: { name: "f", pipeline: "p", items: ["a"], outputAs: "Bad Key" }, match: /outputAs must match/ },
-    { step: { name: "f", pipeline: "p", items: ["a"], onFailure: "ignore" }, match: /onFailure must be/ },
-    { step: { name: "f", pipeline: "p", items: ["a"], concurrency: 5 }, match: /unknown key\(s\) \[concurrency\]/ },
-    { step: { name: "f", pipeline: "p", items: ["a"], model: "not-a-ref" }, match: /model must be/ },
-  ]
-  for (const { step, match } of cases) {
-    const res = validateWorkflow({ id: "pipe-bad", steps: [step] }, "bad.json")
-    assert.equal(res.ok, false, JSON.stringify(step))
-    assert.match(res.error, match, JSON.stringify(step))
-  }
-})
-
-test("校验: race 步（≥2 提示）通过；单分支/非字符串/越权选项键拒绝", () => {
-  const ok = validateWorkflow(
-    {
-      id: "race-flow",
-      steps: [
-        { name: "fastest", race: ["方案A：{{topic}}", "方案B：{{topic}}"], outputAs: "winner" },
-      ],
-    },
-    "race.json",
-  )
-  assert.equal(ok.ok, true)
-
-  const bad: Array<{ step: Record<string, unknown>; match: RegExp }> = [
-    { step: { name: "r", race: ["only one"] }, match: /race must be an array of at least 2/ },
-    { step: { name: "r", race: ["a", 3] }, match: /race must be an array of at least 2/ },
-    { step: { name: "r", race: ["a", "b"], outputAs: "Bad" }, match: /outputAs must match/ },
-    { step: { name: "r", race: ["a", "b"], model: "glm/x" }, match: /unknown key\(s\) \[model\]/ },
-  ]
-  for (const { step, match } of bad) {
-    const res = validateWorkflow({ id: "race-bad", steps: [step] }, "bad.json")
-    assert.equal(res.ok, false, JSON.stringify(step))
-    assert.match(res.error, match, JSON.stringify(step))
-  }
-})
-
-test("run: pipeline 条目并发展开（{{item}} 替换 + 模板解析 + 顺序对齐 + outputAs 入 state）", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  const checked = validateWorkflow(
-    {
-      id: "pipe-run",
-      steps: [
-        {
-          name: "fanout",
-          pipeline: "分析 {{item}}（主题 {{topic}}）",
-          items: ["{{topic}}-甲", "{{topic}}-乙", "{{topic}}-丙"],
-          outputAs: "reports",
-        },
-        { name: "summary", agent: "汇总：{{steps.fanout}}" },
-      ],
-      output: "{{steps.fanout}}",
-    },
-    "pipe-run.json",
-  )
-  assert.equal(checked.ok, true)
-  const def = toDefinition(checked.value)
-  const result = await def.run(
-    { topic: "T" },
-    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
-  )
-  // 每条目一次 agent 调用，{{item}} 已替换、其余模板照常解析
-  assert.equal(echo.prompts.length, 4) // 3 条目 + 1 汇总
-  assert.equal(echo.prompts[0], "分析 T-甲（主题 T）")
-  assert.equal(echo.prompts[2], "分析 T-丙（主题 T）")
-  // 汇总步能引用 fanout 输出（JSON 数组串）
-  assert.ok(echo.prompts[3]!.startsWith("汇总：[\"echo:分析 T-甲"))
-  // 输出模板拿到的是结果数组（与 items 对齐）
-  const parsed = JSON.parse((result as { output: string }).output)
-  assert.equal(parsed.length, 3)
-  assert.ok(parsed[0]!.startsWith("echo:分析 T-甲"))
-  assert.ok(parsed[2]!.startsWith("echo:分析 T-丙"))
-})
-
-test("run: pipeline {{item}} 字面替换对 $ 与花括号安全", async () => {
-  const echo = new EchoExecutor()
-  setExecutor(echo)
-  const checked = validateWorkflow(
-    {
-      id: "pipe-special",
-      steps: [
-        { name: "fanout", pipeline: "quote {{item}} now", items: ["cost $100 {x} & $`backtick`"] },
-      ],
-      output: "done",
-    },
-    "pipe-special.json",
-  )
-  assert.equal(checked.ok, true)
-  const def = toDefinition(checked.value)
-  await def.run(
-    { topic: "T" },
-    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
-  )
-  assert.equal(echo.prompts[0], "quote cost $100 {x} & $`backtick` now")
-})
-
-test("run: race 首个成功者胜出（慢分支不拖整体），outputAs 入 state", async () => {
-  // 按提示标记控速：slow 分支延迟 40ms，fast 分支立即
-  class PacedExecutor implements AgentExecutor {
-    readonly prompts: string[] = []
-    async execute(task: AgentTask) {
-      this.prompts.push(task.prompt)
-      if (task.prompt.includes("SLOW")) {
-        await new Promise((r) => setTimeout(r, 40))
-      }
-      return { output: `done(${task.prompt})` }
-    }
-  }
-  const ex = new PacedExecutor()
-  setExecutor(ex)
-  const checked = validateWorkflow(
-    {
-      id: "race-run",
-      steps: [
-        {
-          name: "fastest",
-          race: ["SLOW 深思方案 {{topic}}", "FAST 直觉方案 {{topic}}"],
-          outputAs: "winner",
-        },
-        { name: "report", agent: "胜者是 {{steps.fastest}}" },
-      ],
-      output: "{{steps.fastest}}",
-    },
-    "race-run.json",
-  )
-  assert.equal(checked.ok, true)
-  const def = toDefinition(checked.value)
-  const result = await def.run(
-    { topic: "T" },
-    { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
-  )
-  assert.equal((result as { output: string }).output, "done(FAST 直觉方案 T)")
-  assert.equal(ex.prompts.length, 3) // 两个竞速分支 + 汇报步
-})
-
-test("run: pipeline 条目失败走 fail-loud（WorkflowPipelineError，不塌缩 null）", async () => {
-  class FlakyExecutor implements AgentExecutor {
-    async execute(task: AgentTask) {
-      if (task.prompt.includes("毒条目")) {
-        throw new Error("agent exploded")
-      }
-      return { output: "ok" }
-    }
-  }
-  setExecutor(new FlakyExecutor())
-  const checked = validateWorkflow(
-    {
-      id: "pipe-fail",
-      steps: [
-        { name: "fanout", pipeline: "处理 {{item}}", items: ["正常条目", "毒条目"] },
-      ],
-    },
-    "pipe-fail.json",
-  )
-  assert.equal(checked.ok, true)
-  const def = toDefinition(checked.value)
-  await assert.rejects(
-    def.run(
-      { topic: "T" },
-      { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) },
-    ),
-    (error: unknown) => {
-      // sequence 层把步骤错误包成 WorkflowSequenceError；步骤级 cause 是
-      // WorkflowPipelineError（fail-loud 不塌缩，聚合信息在 message 里）
-      const err = error as Error & { errors?: Array<{ message?: string }> }
-      assert.equal(err.name, "WorkflowSequenceError")
-      assert.match(err.message, /agent exploded|毒条目|pipeline/i)
-      return true
-    },
-  )
-})
-
-test("装载: pipeline/race 声明文件经 loadDeclarativeWorkflows 正常注册", async () => {
-  await writeWorkflow(
-    "pipe-load.json",
-    {
-      id: "pipe-load",
-      steps: [{ name: "fanout", pipeline: "f {{item}}", items: ["a", "b"] }],
-    },
-  )
-  await writeWorkflow(
-    "race-load.json",
-    { id: "race-load", steps: [{ name: "fastest", race: ["p1 {{topic}}", "p2 {{topic}}"] }] },
-  )
-  const { definitions, errors } = await loadDeclarativeWorkflows(
-    [path.join(baseDir, "pipe-load.json"), path.join(baseDir, "race-load.json")],
-    baseDir,
-  )
-  assert.deepEqual(errors, [])
-  assert.deepEqual(definitions.map((d) => d.id).sort(), ["pipe-load", "race-load"])
-})
-
-// ---------------------------------------------------------------------------
-// P2-14 代码流程装载（.js/.mjs/.cjs 模块 → WorkflowDefinition）
-// ---------------------------------------------------------------------------
-
-import { loadCustomWorkflows } from "../../src/workflows/loader.js"
 
 test("代码装载：.mjs default export / .cjs module.exports / named definition 三形态全收", async () => {
   await writeWorkflow(
@@ -618,52 +72,119 @@ test("代码装载：模块内自定义逻辑真实可执行（变量 + 方法�
   assert.equal(result.output, "slug:hello-custom-logic")
 })
 
-test("代码装载：坏形状逐一报错跳过（无导出/缺 id/缺 run/import 失败/reserved/与 JSON 重复）", async () => {
-  await writeWorkflow("code-empty.mjs", `export const nothing = 1`)
-  await writeWorkflow("code-no-id.mjs", `export default { version: "1.0.0", run: async () => {} }`)
-  await writeWorkflow("code-no-run.mjs", `export default { id: "code-no-run", version: "1.0.0" }`)
-  await writeWorkflow("code-broken.mjs", `export default { id: "code-broken" `)
-  await writeWorkflow(
-    "code-builtin.mjs",
-    `export default { id: "smoke", version: "9.9.9", run: async () => {} }`,
-  )
-  // 同 id@version 与已装载 JSON 冲突（目录混装场景）
-  await writeWorkflow("mix-a.json", { id: "mix-flow", steps: [{ name: "x", agent: "y" }] })
-  await writeWorkflow(
-    "mix-b.mjs",
-    `export default { id: "mix-flow", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
-  )
+test("代码装载：坏形状逐一报错跳过（无导出/缺 id/缺 run/import 失败/reserved/重复）", async () => {
   const dir = path.join(baseDir, "code-bad-dir")
   await fs.mkdir(dir, { recursive: true })
-  const names = ["code-empty.mjs", "code-no-id.mjs", "code-no-run.mjs", "code-broken.mjs", "code-builtin.mjs", "mix-a.json", "mix-b.mjs"]
-  for (const n of names) {
-    await fs.rename(path.join(baseDir, n), path.join(dir, n))
-  }
+  await fs.writeFile(path.join(dir, "a-empty.mjs"), `export const nothing = 1`)
+  await fs.writeFile(path.join(dir, "b-no-id.mjs"), `export default { version: "1.0.0", run: async () => {} }`)
+  await fs.writeFile(path.join(dir, "c-no-run.mjs"), `export default { id: "code-no-run", version: "1.0.0" }`)
+  await fs.writeFile(path.join(dir, "d-broken.mjs"), `export default { id: "code-broken" `)
+  await fs.writeFile(
+    path.join(dir, "e-builtin.mjs"),
+    `export default { id: "smoke", version: "9.9.9", run: async () => {} }`,
+  )
+  await fs.writeFile(
+    path.join(dir, "f-dup.mjs"),
+    `export default { id: "dup-flow", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
+  await fs.writeFile(
+    path.join(dir, "g-dup.mjs"),
+    `export default { id: "dup-flow", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
   const { definitions, errors } = await loadCustomWorkflows([dir], baseDir, ["smoke"])
-  assert.deepEqual(definitions.map((d) => d.id), ["mix-flow"]) // JSON 先到（排序 a.json < b.mjs）
+  assert.deepEqual(definitions.map((d) => d.id), ["dup-flow"])
   const joined = errors.join("\n")
-  assert.match(joined, /code-empty\.mjs: module must export a workflow/)
-  assert.match(joined, /code-no-id\.mjs: workflow\.id must be a non-empty string/)
-  assert.match(joined, /code-no-run\.mjs: workflow\.run must be a function/)
-  assert.match(joined, /code-broken\.mjs: failed to import/)
-  assert.match(joined, /code-builtin\.mjs: id "smoke" is reserved/)
-  assert.match(joined, /mix-b\.mjs: duplicate mix-flow@1\.0\.0/)
+  assert.match(joined, /a-empty\.mjs: module must export a workflow/)
+  assert.match(joined, /b-no-id\.mjs: workflow\.id must be a non-empty string/)
+  assert.match(joined, /c-no-run\.mjs: workflow\.run must be a function/)
+  assert.match(joined, /d-broken\.mjs: failed to import/)
+  assert.match(joined, /e-builtin\.mjs: id "smoke" is reserved/)
+  assert.match(joined, /g-dup\.mjs: duplicate dup-flow@1\.0\.0/)
 })
 
-test("代码装载：目录混装 json + 代码（排序装载），空目录报错文案覆盖四扩展名", async () => {
-  const dir = path.join(baseDir, "code-mix-dir")
+test("代码装载：空目录报错文案只列代码扩展名；点开头文件不参与扫描", async () => {
+  const dir = path.join(baseDir, "code-empty-dir")
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, "z-json.json"), JSON.stringify({ id: "z-json", steps: [{ name: "x", agent: "y" }] }))
-  await fs.writeFile(
-    path.join(dir, "a-code.mjs"),
-    `export default { id: "a-code", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
-  )
-  const { definitions, errors } = await loadCustomWorkflows([dir], baseDir)
-  assert.deepEqual(errors, [])
-  assert.deepEqual(definitions.map((d) => d.id), ["a-code", "z-json"])
+  await fs.writeFile(path.join(dir, ".hidden.mjs"), `export default { id: "hidden", version: "1.0.0", run: async () => {} }`)
+  const result = await loadCustomWorkflows([dir], baseDir)
+  assert.deepEqual(result.definitions, [])
+  assert.match(result.errors[0] ?? "", /no workflow files \(\.js\/\.mjs\/\.cjs\)/)
+})
 
-  const empty = path.join(baseDir, "code-empty-dir")
-  await fs.mkdir(empty)
-  const emptyResult = await loadCustomWorkflows([empty], baseDir)
-  assert.match(emptyResult.errors[0] ?? "", /no workflow files \(\.json\/\.js\/\.mjs\/\.cjs\)/)
+test("裸说明符重写：无 node_modules 的目录可 import <pkg>/core 并真实可用", async () => {
+  // baseDir 是 os.tmpdir() 下的临时目录——node_modules 链上必然没有本包，
+  // 等价于用户项目目录的全局安装场景
+  await writeWorkflow(
+    "bare-core.mjs",
+    `import { agent, defineWorkflow } from "@mickorz/opencode-agentic-workflow/core"
+     export default defineWorkflow({
+       id: "bare-core", version: "1.0.0", stepNames: ["probe"],
+       run: async () => ({ output: "agent:" + typeof agent + ",workflow:" + typeof defineWorkflow }),
+     })`,
+  )
+  const { definitions, errors } = await loadCustomWorkflows([path.join(baseDir, "bare-core.mjs")], baseDir)
+  assert.deepEqual(errors, [])
+  assert.equal(definitions[0]!.id, "bare-core")
+  const fakeCtx = { runId: "r", mode: "start", runSteps: async () => undefined } as never
+  const result = (await definitions[0]!.run({}, fakeCtx)) as { output: string }
+  assert.equal(result.output, "agent:function,workflow:function")
+})
+
+test("裸说明符重写：文件内其余相对导入保持可用（临时 .mjs 落在原目录）", async () => {
+  await writeWorkflow(
+    "with-helper.mjs",
+    `import { shout } from "./helper-shout.mjs"
+     export default {
+       id: "with-helper", version: "1.0.0", stepNames: ["a"],
+       run: async (args) => ({ output: shout(args.topic) }),
+     }`,
+  )
+  await writeWorkflow("helper-shout.mjs", `export const shout = (s) => String(s).toUpperCase() + "!"`)
+  const { definitions, errors } = await loadCustomWorkflows([path.join(baseDir, "with-helper.mjs")], baseDir)
+  assert.deepEqual(errors, [])
+  const fakeCtx = { runId: "r", mode: "start", runSteps: async () => undefined } as never
+  const result = (await definitions[0]!.run({ topic: "works" }, fakeCtx)) as { output: string }
+  assert.equal(result.output, "WORKS!")
+})
+
+test("裸说明符重写：装载后目录无残留临时文件", async () => {
+  const dir = path.join(baseDir, "temp-clean-dir")
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(
+    path.join(dir, "uses-core.mjs"),
+    `import { defineWorkflow } from "@mickorz/opencode-agentic-workflow/core"
+     export default defineWorkflow({ id: "uses-core", version: "1.0.0", stepNames: [], run: async () => ({ output: "ok" }) })`,
+  )
+  const { errors } = await loadCustomWorkflows([dir], baseDir)
+  assert.deepEqual(errors, [])
+  const names = await fs.readdir(dir)
+  assert.deepEqual(names.filter((n) => n.includes(".aw.mjs")), [])
+})
+
+test("裸说明符重写：.cjs 引用 <pkg>/core 给出明确改名提示", async () => {
+  await writeWorkflow(
+    "cjs-core.cjs",
+    `const { agent } = require("@mickorz/opencode-agentic-workflow/core")
+     module.exports = { id: "cjs-core", version: "1.0.0", run: async () => ({ output: typeof agent }) }`,
+  )
+  const { definitions, errors } = await loadCustomWorkflows([path.join(baseDir, "cjs-core.cjs")], baseDir)
+  assert.deepEqual(definitions, [])
+  assert.match(errors[0] ?? "", /cjs-core\.cjs: .*rename to \.mjs/)
+})
+
+test(".json 移除：目录内 .json 给迁移提示且不装载；显式 .json 入口同样提示", async () => {
+  const dir = path.join(baseDir, "json-removal-dir")
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, "legacy.json"), JSON.stringify({ id: "legacy", steps: [] }))
+  await fs.writeFile(
+    path.join(dir, "modern.mjs"),
+    `export default { id: "modern", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
+  const dirResult = await loadCustomWorkflows([dir], baseDir)
+  assert.deepEqual(dirResult.definitions.map((d) => d.id), ["modern"])
+  assert.match(dirResult.errors.join("\n"), /legacy\.json: JSON workflows were removed in v0\.6\.0/)
+
+  const fileResult = await loadCustomWorkflows([path.join(baseDir, "json-removal-dir", "legacy.json")], baseDir)
+  assert.deepEqual(fileResult.definitions, [])
+  assert.match(fileResult.errors[0] ?? "", /JSON workflows were removed in v0\.6\.0/)
 })

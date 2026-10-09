@@ -2,8 +2,7 @@
  * P1-4 agent 调用级选项 单测
  * 覆盖：timeoutMs（超时抛错、计时器清理）/ retries（失败后成功、耗尽抛原错、
  *       超时可重试）/ model 解析与透传（字符串/对象/非法格式）/
- *       声明式校验（agent 步可选键类型检查、非 agent 步拒绝选项键）/
- *       toDefinition 选项透传 / OpenCodeV2Executor task.model 覆盖默认
+ *       OpenCodeV2Executor task.model 覆盖默认
  */
 
 import assert from "node:assert/strict"
@@ -12,8 +11,6 @@ import { test } from "node:test"
 import type { AgentResult, AgentTask } from "../../src/runtime/executor.js"
 import { setExecutor } from "../../src/runtime/engine.js"
 import { agent, AgentTimeoutError } from "../../src/workflow/agent.js"
-import { validateWorkflow, toDefinition } from "../../src/workflows/loader.js"
-import { sequence } from "../../src/workflow/sequence.js"
 import { OpenCodeV2Executor } from "../../src/plugin/opencode-v2-executor.js"
 
 /** 捕获型 executor：可配置延迟与「前 N 次失败」 */
@@ -90,76 +87,6 @@ test("model 非法格式：明确报错（无 /、空 provider、空 id）", asy
   await assert.rejects(agent("p", { model: "glmflash" }), /invalid model "glmflash".*providerID\/modelId/)
   await assert.rejects(agent("p", { model: "/flash" }), /invalid model/)
   await assert.rejects(agent("p", { model: "glm/" }), /invalid model/)
-})
-
-test("声明式校验：agent 步可选键合法 + 类型错误逐一指名", async () => {
-  const ok = validateWorkflow(
-    {
-      id: "w",
-      steps: [
-        { name: "a", agent: "do {{topic}}", model: "glm/glm-5.3-flash", timeoutMs: 60000, retries: 2 },
-      ],
-    },
-    "w.json",
-  )
-  assert.equal(ok.ok, true)
-  if (ok.ok) {
-    const step = ok.value.steps[0] as { model?: string; timeoutMs?: number; retries?: number }
-    assert.equal(step.model, "glm/glm-5.3-flash")
-    assert.equal(step.timeoutMs, 60000)
-    assert.equal(step.retries, 2)
-  }
-
-  const badModel = validateWorkflow(
-    { id: "w", steps: [{ name: "a", agent: "x", model: "glmflash" }] },
-    "w.json",
-  )
-  assert.equal(badModel.ok, false)
-  if (!badModel.ok) assert.match(badModel.error, /model must be "providerID\/modelId"/)
-
-  const badTimeout = validateWorkflow(
-    { id: "w", steps: [{ name: "a", agent: "x", timeoutMs: 0 }] },
-    "w.json",
-  )
-  assert.equal(badTimeout.ok, false)
-  if (!badTimeout.ok) assert.match(badTimeout.error, /timeoutMs must be a positive number/)
-
-  const badRetries = validateWorkflow(
-    { id: "w", steps: [{ name: "a", agent: "x", retries: -1 }] },
-    "w.json",
-  )
-  assert.equal(badRetries.ok, false)
-  if (!badRetries.ok) assert.match(badRetries.error, /retries must be a non-negative integer/)
-
-  // 选项键只对 agent 步开放：checkpoint 步带 model = unknown key
-  const onCheckpoint = validateWorkflow(
-    { id: "w", steps: [{ name: "c", checkpoint: "ok?", model: "a/b" }] },
-    "w.json",
-  )
-  assert.equal(onCheckpoint.ok, false)
-  if (!onCheckpoint.ok) assert.match(onCheckpoint.error, /unknown key\(s\) \[model\]/)
-})
-
-test("toDefinition：声明选项透传到 agent() 调用（捕获 executor 验证）", async () => {
-  const ex = new CapturingExecutor()
-  setExecutor(ex)
-  const checked = validateWorkflow(
-    {
-      id: "opt-flow",
-      version: "1.0.0",
-      steps: [
-        { name: "draft", agent: "write about {{topic}}", model: "glm/glm-5.3-flash", timeoutMs: 60000, retries: 1 },
-      ],
-    },
-    "opt.json",
-  )
-  assert.equal(checked.ok, true)
-  const def = toDefinition(checked.value)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ctx: any = { runSteps: (steps: unknown[], opts: unknown) => sequence(steps as never, opts as never) }
-  await def.run({ topic: "T" }, ctx)
-  assert.equal(ex.tasks.length, 1)
-  assert.deepEqual(ex.tasks[0]!.model, { providerID: "glm", id: "glm-5.3-flash" })
 })
 
 /** 假 session 域：只关心 create 收到的 model 参数 */

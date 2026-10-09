@@ -22,6 +22,7 @@
 
 import { Plugin } from "@opencode/plugin"
 import path from "node:path"
+import { existsSync } from "node:fs"
 
 import { setCheckpointGate } from "../quality/checkpoint.js"
 import { setExecutor } from "../runtime/engine.js"
@@ -37,7 +38,6 @@ import {
 } from "../registry/runner.js"
 import { WorkflowExecutionError } from "../registry/errors.js"
 import { buildWorkflowArgs } from "./tool-args.js"
-import { defineWorkflow } from "./define-workflow.js"
 import { SchedulerService, ScheduleSkipError } from "../scheduler/service.js"
 import { anyLive } from "../registry/run-control.js"
 import { scheduleToolExecute, type ScheduleToolInput } from "./workflow-schedule.js"
@@ -206,14 +206,21 @@ export default Plugin.define({
       .register(artifactWorkflow())
       .register(featureDevelopmentWorkflow({ checkCommand: options.checkCommand }))
 
-    // P4 自定义 workflow（声明式 JSON）：options.workflows 路径（.json 文件
-    // 或目录，相对项目目录）→ 装载注册。文件级错误 warn+跳过（观测/装载
-    // 不能成为主链路故障源）；必须在工具注册前完成（流程清单进工具描述）
+    // 自定义 workflow（代码式 JS 模块）：options.workflows 路径（.js/.mjs/.cjs
+    // 文件或目录，相对项目目录）；未配置时缺省探测项目 flows/ 目录（存在即装载，
+    // 零配置开箱）。文件级错误 warn+跳过（观测/装载不能成为主链路故障源）；
+    // 必须在工具注册前完成（流程清单进工具描述）
     const builtinIds = ["smoke", "reliable", "artifact", "feature-development"]
     const projectDir = ctx.location.directory
-    if (options.workflows && options.workflows.length > 0) {
+    const workflowEntries =
+      options.workflows && options.workflows.length > 0
+        ? options.workflows
+        : existsSync(path.join(projectDir, "flows"))
+          ? ["flows"]
+          : []
+    if (workflowEntries.length > 0) {
       const loaded = await loadCustomWorkflows(
-        options.workflows,
+        workflowEntries,
         projectDir,
         builtinIds,
       )
@@ -242,17 +249,6 @@ export default Plugin.define({
             "built-in workflows remain fully available",
         )
       }
-    }
-
-    // P0-2 workflow_define 的落盘目标：从 options.workflows 推导候选目录
-    // （.json/.js/.mjs/.cjs 文件条目取其父目录；其余条目视为目录本身——
-    // 不要求已存在，define 时 mkdir -p）。相对路径同装载器基准 = 项目目录。
-    const flowsDirs: string[] = []
-    for (const entry of options.workflows ?? []) {
-      const resolved = path.isAbsolute(entry) ? entry : path.join(projectDir, entry)
-      const isFileEntry = /\.(json|js|mjs|cjs)$/.test(resolved)
-      const dir = isFileEntry ? path.dirname(resolved) : resolved
-      if (!flowsDirs.includes(dir)) flowsDirs.push(dir)
     }
 
     // P2.5 durable journal：配置 journalDir 后，run 经 startWorkflow/resumeWorkflow
@@ -379,8 +375,8 @@ export default Plugin.define({
             flow: {
               type: "string",
               description:
-                "Workflow id from the Available workflows list above, or an id " +
-                "just defined via workflow_define (default smoke). Unknown ids " +
+                "Workflow id from the Available workflows list above (default " +
+                "smoke). Unknown ids " +
                 "fail with the list of available ids",
             },
             resumeRunId: {
@@ -614,82 +610,6 @@ export default Plugin.define({
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             return { output: `[agentic-workflow] workflow_control failed: ${message}` }
-          }
-        },
-      })
-
-      // P0-2 workflow_define 工具：主 agent 对话中直接定义声明式流程——
-      // 校验→注册→落盘，无需人工编辑文件（自然语言 → JSON 生成链路的落点）
-      editor.add({
-        name: "workflow_define",
-        description:
-          "Define a custom workflow as a declarative JSON object - validated, " +
-          "persisted to the configured flows directory, and registered " +
-          "IMMEDIATELY (callable via the workflow tool right away, auto-loaded " +
-          "on every future start). Use this when the user asks for a new " +
-          "workflow/pipeline instead of editing files by hand.\n" +
-          "Format (all keys optional except id and steps):\n" +
-          '{ id: "kebab-case", version?: "1.0.0", description?: string, ' +
-          "args?: JSON-Schema (default: only topic), steps: [...], output?: template }\n" +
-          "Each step = { name: kebab-case, <exactly one step key> }:\n" +
-          '- agent: prompt string. ALWAYS append the recursion guard sentence ' +
-          "禁止调用 workflow / workflow_metrics 工具. Templates {{topic}}, " +
-          "{{args.x}}, earlier {{steps.<name>}} are available\n" +
-          "- checkpoint: approval-gate message template\n" +
-          "- verify: { artifact: \"{{steps.<name>}}\", criteria?: string } semantic review\n" +
-          "- fileExists: relative path assertion (workspace root)\n" +
-          "- subflow: \"flow-id\" to nest another registered workflow as a step " +
-          "(optional args: object of primitives/templates; requires journalDir; " +
-          "max nesting depth 3; the subflow output feeds {{steps.<name>}})\n" +
-          "- pipeline: per-item prompt template ({{item}} = entry; keep the " +
-          "recursion guard sentence) + items: non-empty array of templates; " +
-          "optional outputAs/onFailure(\"fail-fast\"|\"continue\")/model/timeoutMs/" +
-          "retries; results = array aligned with items (JSON string in " +
-          "{{steps.<name>}}); whole step is one resume unit\n" +
-          "- race: array of >=2 prompt templates, first success wins (optional " +
-          "outputAs); all-fail = step failure\n" +
-          "Rules: unknown template variable = step failure; changing steps " +
-          "requires bumping version; built-in ids (smoke/reliable/artifact/" +
-          "feature-development) are reserved.",
-        input: {
-          type: "object",
-          properties: {
-            workflow: {
-              type: "object",
-              description: "The declarative workflow JSON (see format above)",
-            },
-            dir: {
-              type: "string",
-              description:
-                "Optional target directory for the .json file (default: the " +
-                "first configured flows directory)",
-            },
-          },
-          required: ["workflow"],
-        } as Record<string, unknown>,
-        output: {
-          type: "string",
-        } as Record<string, unknown>,
-        async execute(input: unknown) {
-          const parsed = (input as { workflow?: unknown; dir?: unknown }) ?? {}
-          const dir =
-            typeof parsed.dir === "string" && parsed.dir.length > 0
-              ? path.isAbsolute(parsed.dir)
-                ? parsed.dir
-                : path.join(projectDir, parsed.dir)
-              : undefined
-          try {
-            const outcome = await defineWorkflow({
-              registry,
-              reservedIds: builtinIds,
-              raw: parsed.workflow,
-              flowsDirs,
-              dir,
-            })
-            return { output: outcome.message }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            return { output: `[agentic-workflow] workflow_define failed: ${message}` }
           }
         },
       })
