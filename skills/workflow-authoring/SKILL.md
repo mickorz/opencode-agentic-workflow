@@ -10,7 +10,21 @@ description: >
 # workflow-authoring（代码流程编写）
 
 把用户的流程需求变成可复用的代码 workflow：**对话澄清 → 写 flows 目录
-JS 模块 → 保存即用（未知 id 自动重扫注册）→ `workflow` 工具试跑**。
+JS 模块 → 保存即用（未知 id 自动重扫注册）→ 自己调 `workflow` 工具试跑
+→ 汇报结果**。
+
+## 零语法契约（本 skill 的服务边界）
+
+**用户永远只说需求，不说工具语法。** `flow=` / `topic=` /
+`checkpointMode=` 这些参数全部由你（agent）组织：
+
+- 用户说「创建一个 workflow js：需求是 xxx」→ 你走完澄清、写文件、
+  **立即自己调用 workflow 工具试跑**（topic 从需求里取一个小而真实的
+  样例，checkpointMode 用 auto-approve）、把运行结果汇报给用户——
+  一口气做完，中途不要把工具参数丢回给用户
+- 用户以后想再跑：说人话即可（「用拼音口诀流程，词：知识库」/
+  「再跑一次发布说明，主题换成 y」）——由你翻译成工具参数
+- 需求已明确就别问；有真歧义才问，且一次问全
 
 > v0.6.0 起声明式 JSON 流程已移除（`workflow_define` 工具同步下线），
 > 自定义流程只有代码形态。历史 JSON 用 `@mickorz/opencode-agentic-workflow/core`
@@ -105,29 +119,29 @@ export default defineWorkflow({
    （拼音表/映射表/词表）时，**把数据直接内嵌进 .mjs 文件**（大表放
    文件底部，配惰性索引）；库能力做不到的部分交给 `agent` 步
 
-## 第三步：即时试跑（无需重启）
+## 第三步：立即试跑 + 汇报（无需重启，你自己跑，不是让用户跑）
 
-保存文件后**直接调用 `workflow` 工具**——未知 flow id 会触发一次 flows
+保存文件后**你直接调用 `workflow` 工具**——未知 flow id 会触发一次 flows
 目录增量重扫，刚写的模块当场注册运行（v0.6.1 起；v1「定义即注册」的
-代码形态对位）：
+代码形态对位）。参数自己组织：`flow=<id>, topic=<从需求取的小而真实样例>,
+checkpointMode=auto-approve`（headless 必传）。关注：
 
-- 成功：工具正常执行，输出带 `[<id>@<version> runId=…]`
+- 步骤是否全 completed；失败步的报错（参数缺失/文件路径/评审否决）
+- 产物是否落盘、内容是否符合预期
 - `workflow not found` 且附 `flows load errors` 清单：文件写了但没注册
   上——按指名的错误修文件再试
+- 有 `background: true` 需求时用 `workflow_control status` 轮询
 - **边界（如实）**：只有**新文件**能被重扫拾取；**改动已装载文件**
   （含升 version）需重启生效（Node ESM 缓存按路径，重导返回旧模块）。
   编辑既有流程后用 resumeRunId 前先重启
 
-## 第四步：试跑验证
+试跑通过后**用自然语言向用户汇报**（不要贴工具语法）：
 
-调用 `workflow` 工具：`flow=<id>, topic=<真实小主题>, checkpointMode=auto-approve`
-（headless 必传）。关注：
-
-- 步骤是否全 completed；失败步的报错（参数缺失/文件路径/评审否决）
-- 产物是否落盘、内容是否符合预期
-- 有 `background: true` 需求时用 `workflow_control status` 轮询
-
-试跑通过后向用户报告：流程 id、参数用法（含 args 清单）、一句话示例。
+```
+流程已创建并试跑通过：pinyin-mnemonic（中文词 -> 拼音首字母 -> 记忆口诀）
+试跑：知识库 -> ZSK，口诀「知识三点连成库」
+以后想用，直接说：「用拼音口诀流程，词：xxx」
+```
 
 ## JSON → JS 迁移映射
 
