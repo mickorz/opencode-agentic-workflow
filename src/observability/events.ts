@@ -102,6 +102,13 @@ export interface RunProgressSnapshot {
     status: string
     startedAt?: number
     completedAt?: number
+    /**
+     * 步骤内 agent 调用 token 累计（v0.7.0 面板信息密度：列表行直接显示，
+     * 不用等 detail 区）。recorder 维护，快照透传
+     */
+    usage?: { input: number; output: number; reasoning: number }
+    /** 步骤内最后一次 agent 调用的模型（v0.7.0，同上） */
+    model?: string
   }>
 }
 

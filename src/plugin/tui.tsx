@@ -1,5 +1,6 @@
 /**
- * OpenCode V2 TUI 插件入口（P2.3 checkpoint 审批 + P2-8 进度面板）
+ * OpenCode V2 TUI 插件入口（P2.3 checkpoint 审批 + P2-8 进度面板；
+ * v0.7.0 批次 A/B：主题色 + prompt.footer 状态条 + sidebar 紧凑树）
  *
  * 加载约定：package.json exports["./tui"] -> 本文件（default export Plugin.define）。
  * 职责：
@@ -8,14 +9,21 @@
  *   - /workflow 命令打开进度面板（session.panel slot）：
  *     初始经 snapshot RPC 同步近期 run，之后订阅 progress 事件实时更新；
  *     最新 run 的节点详情经 detail RPC 按需拉取（runId@status 去重）。
+ *   - prompt.footer 状态条：运行中 run 的常驻一行摘要（v1
+ *     session_prompt_right 对位；打字时也可见，无需开面板）。
+ *   - sidebar.content 紧凑树：侧边栏常驻 run 列表（v1 sidebar_content
+ *     对位；空板不渲染）。
  *
  * 注意：
  *   - 本文件只在 TUI 宿主内加载；server 宿主只加载 "." 入口（src/plugin/index.ts）。
  *   - solid-js 用法全部集中在本文件（v1 实测教训：多文件会解析出不同实例）。
- *   - 视图逻辑在 progress-view.ts（纯函数，单测覆盖）；本文件只剩摆线。
+ *   - 视图逻辑在 progress-view.ts（纯函数，单测覆盖）；本文件只剩摆线与
+ *     tone -> ctx.theme 的颜色映射（v0.7.0：feedback.success/warning/error +
+ *     text.muted 四档语义色）。
  */
 
 import { Plugin } from "@opencode/plugin/tui"
+import type { ResolvedTheme } from "@opencode/theme/tui"
 import { createSignal } from "solid-js"
 
 import { CHECKPOINT_REQUESTED_EVENT, CheckpointRpc } from "./checkpoint-rpc.js"
@@ -28,12 +36,16 @@ import {
   parseSessionReplay,
 } from "./progress-rpc.js"
 import {
-  renderDetailLines,
+  renderDetailRows,
   renderDetailSection,
-  renderPanelLines,
-  renderSessionLines,
+  renderPanelRows,
+  renderPromptFooterRows,
+  renderSessionRows,
   renderSessionSection,
+  renderSidebarRows,
   type DetailSection,
+  type PanelRow,
+  type PanelTone,
   type SessionSection,
 } from "./progress-view.js"
 import type { RunProgressSnapshot } from "../observability/events.js"
@@ -43,6 +55,32 @@ type TuiContext = Plugin.Context
 
 /** 面板内容名（ui.panel.open 与 slot claim 的握手键） */
 const PANEL_NAME = "agentic-workflow"
+
+/** tone -> 主题色（v2 ResolvedTheme：feedback 三态 + text.muted；base 走默认前景） */
+function toneFg(theme: ResolvedTheme, tone: PanelTone | undefined) {
+  switch (tone) {
+    case "success":
+      return theme.text.feedback.success.base
+    case "warning":
+      return theme.text.feedback.warning.base
+    case "error":
+      return theme.text.feedback.error.base
+    case "muted":
+      return theme.text.muted
+    default:
+      return undefined
+  }
+}
+
+/** 结构化行 -> 带色 <text>（bold 用 <b> 包裹；tone 缺省即宿主默认前景） */
+function RowText(props: { key?: number; theme: ResolvedTheme; row: PanelRow }) {
+  const fg = () => toneFg(props.theme, props.row.tone)
+  return (
+    <text fg={fg()}>
+      {props.row.bold ? <b>{props.row.text}</b> : props.row.text}
+    </text>
+  )
+}
 
 export default Plugin.define({
   id: "agentic-workflow-tui",
@@ -97,7 +135,8 @@ async function handleCheckpointRequest(ctx: TuiContext, data: unknown): Promise<
 
 /**
  * 进度面板装配：状态 signal + snapshot 初始同步 + progress 事件流 +
- * session.panel claim + /workflow 命令。返回清理函数。
+ * session.panel claim + /workflow 命令 + prompt.footer 状态条 + sidebar 紧凑树。
+ * 返回清理函数。
  */
 function setupProgressPanel(ctx: TuiContext): () => void {
   const [runs, setRuns] = createSignal<readonly RunProgressSnapshot[]>([])
@@ -131,7 +170,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         const replay = parseSessionReplay(output)
         setSession(
           replay
-            ? { runId, step: target.name!, lines: renderSessionLines(replay) }
+            ? { runId, step: target.name!, rows: renderSessionRows(replay) }
             : undefined,
         )
       })
@@ -155,14 +194,14 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         const parsed = parseRunDetail(output)
         setDetail(
           parsed
-            ? { runId: snapshot.runId, lines: renderDetailLines(parsed) }
-            : { runId: snapshot.runId, lines: [] },
+            ? { runId: snapshot.runId, rows: renderDetailRows(parsed) }
+            : { runId: snapshot.runId, rows: [] },
         )
         refreshSession(snapshot.runId, parsed)
       })
       .catch(() => {
         if (key !== detailKey) return
-        setDetail({ runId: snapshot.runId, lines: [] })
+        setDetail({ runId: snapshot.runId, rows: [] })
       })
   }
 
@@ -214,20 +253,55 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         input.name === PANEL_NAME ? (
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
             {/* 视图行全部来自纯函数层；signal 读取发生在 JSX 内（响应式追踪） */}
-            {(live() || runs().length > 0
-              ? [
-                  ...renderPanelLines(runs()),
-                  ...renderDetailSection(runs(), detail()),
-                  ...renderSessionSection(runs(), session()),
-                ]
-              : ["Agentic Workflow", "(no runs yet — start one with workflow_start)"]
-            ).map((line) => (
-              <text>{line}</text>
-            ))}
+            {(
+              (live() || runs().length > 0
+                ? [
+                    ...renderPanelRows(runs()),
+                    ...renderDetailSection(runs(), detail()),
+                    ...renderSessionSection(runs(), session()),
+                  ]
+                : ([
+                    { text: "Agentic Workflow", bold: true },
+                    { text: "(no runs yet — start one with workflow_start)", tone: "muted" },
+                  ] as PanelRow[])
+            ) as PanelRow[]
+            ).map((row, i) => <RowText key={i} theme={ctx.theme} row={row} />)}
           </box>
         ) : (
           <></>
         )
+      )
+    },
+  })
+
+  // prompt.footer 状态条（批次 B）：运行中 run 常驻摘要；无运行时整条不渲染
+  const offFooter = ctx.ui.slot({
+    append: "prompt.footer",
+    render: () => {
+      const rows = renderPromptFooterRows(runs())
+      if (rows.length === 0) return <></>
+      return (
+        <box flexDirection="column">
+          {rows.map((row, i) => (
+            <RowText key={i} theme={ctx.theme} row={row} />
+          ))}
+        </box>
+      )
+    },
+  })
+
+  // sidebar.content 紧凑树（批次 B）：侧边栏常驻；空板整块不渲染
+  const offSidebar = ctx.ui.slot({
+    append: "sidebar.content",
+    render: () => {
+      if (runs().length === 0) return <></>
+      const rows = renderSidebarRows(runs())
+      return (
+        <box flexDirection="column">
+          {rows.map((row, i) => (
+            <RowText key={i} theme={ctx.theme} row={row} />
+          ))}
+        </box>
       )
     },
   })
@@ -260,5 +334,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
   return () => {
     offEvent()
     offSlot()
+    offFooter()
+    offSidebar()
   }
 }

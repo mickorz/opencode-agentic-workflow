@@ -10,7 +10,7 @@ import { test } from "node:test"
 
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import type { ExecutionStore } from "../../src/state/store.js"
-import { RunJournal, toRunDetail } from "../../src/state/recorder.js"
+import { RunJournal, toProgressSnapshot, toRunDetail } from "../../src/state/recorder.js"
 import { createEventBus, emitEvent, setEventBus } from "../../src/observability/events.js"
 
 let baseDir: string
@@ -308,6 +308,13 @@ test("P2-8b 步骤元数据：agent.completed 按 runId 聚合到 currentStep（
     const detail = toRunDetail(journal.run)
     assert.deepEqual(detail.steps[0]?.usage, { input: 150, output: 60, reasoning: 10 })
     assert.equal(detail.steps[0]?.model, "glm/glm-5.3-air")
+
+    // v0.7.0：进度快照同样透传步骤元数据（面板列表行 token/模型后缀的数据面）
+    const snapshot = toProgressSnapshot(journal.run)
+    assert.deepEqual(snapshot.steps[0]?.usage, { input: 150, output: 60, reasoning: 10 })
+    assert.equal(snapshot.steps[0]?.model, "glm/glm-5.3-air")
+    assert.equal(snapshot.steps[1]?.usage, undefined)
+    assert.equal(snapshot.steps[1]?.model, undefined)
   } finally {
     setEventBus(createEventBus())
   }

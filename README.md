@@ -415,16 +415,15 @@ journal 每次状态变更都会派发 `run.progress` 全量快照事件。
 
 ```
 Agentic Workflow
-✗ feature-development@1.0.0  5.0s
-  ✓ gather  2.0s
+▶ feature-development@1.0.0  12.4s  · 1 running · 3.2k tok
+  ✓ gather  2.0s  · 1.5k tok · glm/glm-5.3-flash
   ▶ implement  2.5s
   · verify
-  ↳ verify rejected the patch
 ✓ paced@1.0.0  24.0s
 ── detail
-✓ artifact@1.0.0 · completed · 42.0s
+✓ artifact@1.0.0 · completed · 42.0s  · 2.1k tok
   run_9f3c… · args {"topic":"节点详情验收"}
-  ✓ write  18.2s
+  ✓ write  18.2s  · 2.1k tok · glm/glm-5.3-flash
     → 已写入 artifact.md（约 1200 字）……
   ✓ check  1.1s
     → artifact.md exists (4.2 KB)
@@ -437,6 +436,22 @@ args 预览 / 每步骤的输出或错误预览（折行 + 截断）/ 步骤与�
 详情经 `agentic-workflow-progress` RPC 的 `detail` 方法拉取（同一状态只拉
 一次，终态转换再拉一次收尾）；未配置 `journalDir` 时详情区静默缺省，
 面板其余不受影响。
+
+### 显示密度与常驻入口（v0.7.0）
+
+v1（opencode-dynamicworkflows）TUI 显示功能对齐第一、二批（对比清单见
+`dev-docs/research/v1-v2-TUI显示功能对比与补齐清单.md`）：
+
+- **主题语义色**：运行黄（warning）/ 成功绿（success）/ 失败红（error）/
+  次要灰（muted）四档，取自宿主 `ctx.theme`（跟随主题与深浅色模式）；
+  头行加粗。终态 run 不再显示 running 计数（停表语义）
+- **信息密度**：run 头行显示 `N running` 与 token 合计；列表步骤行直接
+  带 `· 1.5k tok · 模型` 后缀（快照事件透传 usage/model，不用等 detail
+  区拉取）；detail 头行同样带 token 合计
+- **prompt.footer 状态条**：有 run 在跑时，输入框下方常驻一行
+  `◐ flow@ver done/total · N running`——打字时也看得见进度，无需开面板
+- **sidebar 紧凑树**：侧边栏常驻近期 run 一览（窄宽截断 + 行数预算，
+  超出提示 `/workflow` 开面板）；空板不渲染
 
 ### Open Session 回放
 

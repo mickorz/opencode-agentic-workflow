@@ -62,6 +62,8 @@ export function toProgressSnapshot(run: WorkflowRun): RunProgressSnapshot {
       status: step.status,
       ...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
       ...(step.completedAt !== undefined ? { completedAt: step.completedAt } : {}),
+      ...(step.usage !== undefined ? { usage: step.usage } : {}),
+      ...(step.model !== undefined ? { model: step.model } : {}),
     })),
   }
 }
