@@ -38,6 +38,31 @@
 4. 证据优先级：journal + traceDir 文件 > stdout（stdout 可能截断或乱码，验收以落盘证据为准）。
 5. 完整配方见 `dev-docs/experience/opencode-run-hang-watchdog.md`。
 
+## skills 目录：修改后必须手动同步全局
+
+`skills/`（`workflow-authoring` / `workflow-optimize`）随 npm 包分发，但本机
+宿主采用**拷贝型**启用方式：生效副本在 `~/.config/opencode/skills/`，是
+安装时的快照。
+
+### 规则
+
+1. **发版不等于生效**：宿主重启只更新插件本体（npm 缓存自动拉 latest），
+   拷贝型 skills 不会跟着更新——发多少版，会话加载的仍是旧 skill
+   （坑点见 `dev-docs/experience/声明式JSON下线与core裸说明符解析坑.md`）。
+2. **修改 `skills/` 并发版后，必须手动同步**（二选一）：
+   - 官方路径：`npx @mickorz/opencode-agentic-workflow update`
+     （刷新拷贝型 skills + 清宿主缓存）；
+   - 直接拷贝（等价）：
+     ```bash
+     for s in workflow-authoring workflow-optimize; do
+       rm -rf ~/.config/opencode/skills/$s && cp -R skills/$s ~/.config/opencode/skills/$s
+     done
+     ```
+3. **同步后必须验证**：对每个 skill 跑
+   `diff -q skills/<name>/SKILL.md ~/.config/opencode/skills/<name>/SKILL.md`，
+   一致才算完成；不一致等于没同步。
+4. 同步只改磁盘副本，**还需重启 opencode 会话**才会加载新版 skill。
+
 ## 示例目录：`examples/` 与 `dev-examples/`
 
 两个示例目录面向不同受众，严格分流。
