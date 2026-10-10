@@ -83,9 +83,11 @@ function toneFg(theme: ResolvedTheme, tone: PanelTone | undefined) {
 function RowText(props: { key?: number; theme: ResolvedTheme; row: PanelRow }) {
   const fg = () => toneFg(props.theme, props.row.tone)
   return (
-    <text fg={fg()}>
-      {props.row.bold ? <b>{props.row.text}</b> : props.row.text}
-    </text>
+    // 裸 <text> 在宿主 TUI 布局里不占行高，兄弟 text 会叠到同一行（空格
+    // 透出下层字符）——必须各自包一层 box 才各归其位（v0.10.7）
+    <box>
+      <text fg={fg()}>{props.row.bold ? <b>{props.row.text}</b> : props.row.text}</text>
+    </box>
   )
 }
 
