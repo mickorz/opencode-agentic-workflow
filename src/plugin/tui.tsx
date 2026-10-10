@@ -246,6 +246,29 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     refreshDetail(snapshot)
   })
 
+  // 用户折叠态（v1 点击折叠对位）：runId -> collapsed；面板与侧栏共享。
+  // 行上的 collapsed 字段由纯函数层算好（含 override 覆盖自动规则），
+  // 点击即写反值——TUI 层不含展开规则。
+  const [collapseOverride, setCollapseOverride] = createSignal<ReadonlyMap<string, boolean>>(new Map())
+  const toggleCollapse = (row: PanelRow) => {
+    if (row.runId === undefined || row.collapsed === undefined) return
+    setCollapseOverride((prev) => {
+      const next = new Map(prev)
+      next.set(row.runId!, !row.collapsed)
+      return next
+    })
+  }
+  /** 可折叠头行：点击整行切换（v1 实测教训——handler 只挂标题行自身，
+   *  挂外层会因事件冒泡在节点导航后误折叠） */
+  const RowLine = (props: { key?: number; row: PanelRow }) =>
+    props.row.collapsible ? (
+      <box onMouseDown={() => toggleCollapse(props.row)}>
+        <RowText theme={ctx.theme} row={props.row} />
+      </box>
+    ) : (
+      <RowText theme={ctx.theme} row={props.row} />
+    )
+
   // 面板 claim：宿主选中我们的内容名时才渲染；其余名字让位（返回空 fragment）
   const offSlot = ctx.ui.slot({
     append: "session.panel",
@@ -257,7 +280,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
             {(
               (live() || runs().length > 0
                 ? [
-                    ...renderPanelRows(runs()),
+                    ...renderPanelRows(runs(), Date.now(), { collapseOverride: collapseOverride() }),
                     ...renderDetailSection(runs(), detail()),
                     ...renderSessionSection(runs(), session()),
                   ]
@@ -266,7 +289,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
                     { text: "(no runs yet — start one with workflow_start)", tone: "muted" },
                   ] as PanelRow[])
             ) as PanelRow[]
-            ).map((row, i) => <RowText key={i} theme={ctx.theme} row={row} />)}
+            ).map((row, i) => <RowLine key={i} row={row} />)}
           </box>
         ) : (
           <></>
@@ -296,11 +319,11 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     append: "sidebar.content",
     render: () => {
       if (runs().length === 0) return <></>
-      const rows = renderSidebarRows(runs())
+      const rows = renderSidebarRows(runs(), Date.now(), { collapseOverride: collapseOverride() })
       return (
         <box flexDirection="column">
           {rows.map((row, i) => (
-            <RowText key={i} theme={ctx.theme} row={row} />
+            <RowLine key={i} row={row} />
           ))}
         </box>
       )

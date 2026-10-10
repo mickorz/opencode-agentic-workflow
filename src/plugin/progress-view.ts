@@ -38,6 +38,12 @@ export interface PanelRow {
   text: string
   tone?: PanelTone
   bold?: boolean
+  /** 该行所属 run（折叠交互的归属键；头行 = 可折叠目标） */
+  runId?: string
+  /** 可折叠 run 头行标记（TUI 层挂点击切换；行文本已带 ▶/▼ 指示） */
+  collapsible?: boolean
+  /** 本行当前是否处于折叠态（点击切换的目标态 = !collapsed） */
+  collapsed?: boolean
 }
 
 export function runGlyph(status: string): string {
@@ -144,6 +150,11 @@ export interface PanelLinesOptions {
   maxWidth?: number
   /** 展开全步骤树的 run 数（最新的在前）；默认 1（最新 run 展开） */
   expandedRuns?: number
+  /**
+   * 用户手动折叠态（runId -> collapsed；v1 点击折叠对位）。命中即覆盖
+   * expandedRuns 的自动展开规则——点开更早的 run、折起最新 run 都靠它。
+   */
+  collapseOverride?: ReadonlyMap<string, boolean>
 }
 
 function truncate(text: string, maxWidth: number | undefined): string {
@@ -216,12 +227,20 @@ export function renderPanelRows(
     const isTop = run.parentRunId === undefined
     const children = childrenOf.get(run.runId) ?? []
     if (isTop) {
+      // 折叠态：用户 override 优先（点击切换），否则按 expandedRuns 自动
+      const collapsed = options?.collapseOverride?.get(run.runId) ?? topLevelIndex >= expanded
       rows.push({
-        text: truncate(`${vm.glyph} ${vm.title}  ${vm.duration}${runHeaderSuffix(vm)}`, options?.maxWidth),
+        text: truncate(
+          `${collapsed ? "▶" : "▼"} ${vm.glyph} ${vm.title}  ${vm.duration}${runHeaderSuffix(vm)}`,
+          options?.maxWidth,
+        ),
         tone: vm.tone,
         bold: true,
+        runId: run.runId,
+        collapsible: true,
+        collapsed,
       })
-      if (topLevelIndex < expanded) {
+      if (!collapsed) {
         // subflow:<id> 步骤行与板上子 run 一一配对（同 id 按序消耗），
         // 配上的子 run 内联到步骤位置，步骤行不再重复渲染
         const pending = [...children]
@@ -238,17 +257,14 @@ export function renderPanelRows(
           rows.push({
             text: truncate(`  ${step.glyph} ${step.label}${duration}${stepMetaSuffix(step)}`, options?.maxWidth),
             tone: step.tone,
+            runId: run.runId,
           })
         }
         if (vm.failure) {
-          rows.push({ text: truncate(`  ↳ ${vm.failure}`, options?.maxWidth), tone: "error" })
+          rows.push({ text: truncate(`  ↳ ${vm.failure}`, options?.maxWidth), tone: "error", runId: run.runId })
         }
         // 未被步骤认领的子 run（防御：种子缺步骤/板上裁剪）照旧挂尾，不丢信息
         for (const child of pending) {
-          emitRun(child, topLevelIndex)
-        }
-      } else {
-        for (const child of children) {
           emitRun(child, topLevelIndex)
         }
       }

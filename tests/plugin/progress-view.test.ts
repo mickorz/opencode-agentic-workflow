@@ -144,12 +144,12 @@ test("renderPanelRows: 最新 run 展开步骤树，其余收为单行；失败�
   )
   assert.deepEqual(texts(rows), [
     "Agentic Workflow",
-    "✗ feature-development@1.0.0  5.0s",
+    "▼ ✗ feature-development@1.0.0  5.0s",
     "  ✓ gather  2.0s",
     "  ▶ implement  2.5s",
     "  · verify",
     "  ↳ boom",
-    "✓ feature-development@1.0.0  1.0s",
+    "▶ ✓ feature-development@1.0.0  1.0s",
   ])
   // 步骤停表语义：run 失败后，仍处 running 的步骤时长停在 run 收口时刻
   assert.equal(rows[3]?.text, "  ▶ implement  2.5s")
@@ -183,7 +183,7 @@ test("renderPanelRows: 头行带 running 计数与 token 合计后缀", () => {
     ],
     NOW,
   )
-  assert.equal(rows[1]?.text, "▶ feature-development@1.0.0  6.0s  · 1 running · 1.0k tok")
+  assert.equal(rows[1]?.text, "▼ ▶ feature-development@1.0.0  6.0s  · 1 running · 1.0k tok")
   // 步骤行元数据后缀：token + 模型
   assert.equal(rows[2]?.text, "  ✓ gather  2.0s  · 1.0k tok")
 })
@@ -228,7 +228,7 @@ test("v0.8.5 subflow 去重：subflow:<id> 步骤行被对应子 run 行取代�
   const rows = renderPanelRows([parent, poet, scientist], NOW)
   assert.deepEqual(texts(rows), [
     "Agentic Workflow",
-    "▶ feature-development@1.0.0  5.0s",
+    "▼ ▶ feature-development@1.0.0  5.0s",
     "  ✓ prepare  1.0s",
     // subflow 步骤行被子 run 行取代：同位置、步骤缩进、只出现一次
     "  ↳ ✓ sentence_poet@1.0.0  2.0s · subflow",
@@ -249,7 +249,7 @@ test("v0.8.5 subflow 去重：子 run 不在板上时回退步骤行（不丢信
   const rows = renderPanelRows([parent], NOW)
   assert.deepEqual(texts(rows), [
     "Agentic Workflow",
-    "▶ feature-development@1.0.0  5.0s",
+    "▼ ▶ feature-development@1.0.0  5.0s",
     "  ✓ subflow:sentence_poet  3.0s",
   ])
 })
@@ -274,13 +274,59 @@ test("P2-9 lineage：subflow 子 run 缩进挂在父 run 下（深度感知 + �
   const rows = renderPanelRows([parent, child, grandchild], NOW)
   assert.deepEqual(texts(rows), [
     "Agentic Workflow",
-    "▶ feature-development@1.0.0  5.0s  · 1 running",
+    "▼ ▶ feature-development@1.0.0  5.0s  · 1 running",
     "  ✓ gather  2.0s",
     "  ▶ implement  3.5s",
     "  · verify",
     "    ↳ ✗ feature-development@1.0.0  2.0s · subflow",
     "      ↳ child exploded",
     "        ↳ ▶ feature-development@1.0.0  3.0s ⇢ subflow",
+  ])
+})
+
+test("v0.8.8 点击折叠：头行带 ▶/▼ 指示与交互元数据；override 覆盖自动展开", () => {
+  const first = snapshot({ runId: "run_1", status: "completed", completedAt: 9_000 })
+  const second = snapshot({
+    runId: "run_2",
+    startedAt: 1_000,
+    status: "completed",
+    completedAt: 2_000,
+    steps: [{ index: 0, name: "gather", status: "completed", startedAt: 1_000, completedAt: 2_000 }],
+  })
+
+  // 默认（无 override）：最新展开 ▼，其余折叠 ▶——与既有自动规则一致
+  const base = renderPanelRows([first, second], NOW)
+  assert.equal(base[1]?.collapsible, true)
+  assert.equal(base[1]?.runId, "run_1")
+  assert.equal(base[1]?.collapsed, false)
+  assert.equal(base[1]?.text.startsWith("▼ "), true)
+  const baseLast = base[base.length - 1]
+  assert.equal(baseLast?.collapsed, true)
+  assert.equal(baseLast?.text.startsWith("▶ "), true)
+
+  // override 折起最新 run：只剩标题行（步骤/失败摘要/子 run 全部隐藏）
+  const collapsed = renderPanelRows(
+    [first, second],
+    NOW,
+    { collapseOverride: new Map([["run_1", true]]) },
+  )
+  assert.deepEqual(collapsed.map((r) => ({ t: r.text, c: r.collapsed })), [
+    { t: "Agentic Workflow", c: undefined },
+    { t: "▶ ✓ feature-development@1.0.0  5.0s", c: true },
+    { t: "▶ ✓ feature-development@1.0.0  1.0s", c: true },
+  ])
+
+  // override 展开更早的 run：其步骤树可见并携带归属 runId，箭头 ▼
+  const expanded = renderPanelRows(
+    [first, second],
+    NOW,
+    { collapseOverride: new Map([["run_2", false]]) },
+  )
+  assert.equal(expanded[1]?.collapsed, false) // run_1（最新）保持自动展开
+  const secondBlock = expanded.filter((r) => r.runId === "run_2")
+  assert.deepEqual(secondBlock.map((r) => r.text), [
+    "▼ ✓ feature-development@1.0.0  1.0s",
+    "  ✓ gather  1.0s",
   ])
 })
 
