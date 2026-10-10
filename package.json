@@ -46,10 +46,6 @@
       "import": "./dist/plugin/tui.js",
       "types": "./dist/plugin/tui.d.ts"
     },
-    "./core": {
-      "import": "./dist/core/index.js",
-      "types": "./dist/core/index.d.ts"
-    },
     "./rpc": {
       "import": "./dist/plugin/checkpoint-rpc.js",
       "types": "./dist/plugin/checkpoint-rpc.d.ts"

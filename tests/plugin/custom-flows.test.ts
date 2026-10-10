@@ -31,10 +31,10 @@ test.beforeEach(async () => {
   await fs.mkdir(flowsDir, { recursive: true })
 })
 
-async function writeFlow(name: string, id: string, version = "1.0.0"): Promise<void> {
+async function writeFlow(name: string, flowName: string): Promise<void> {
   await fs.writeFile(
     path.join(flowsDir, name),
-    `export default { id: "${id}", version: "${version}", stepNames: ["a"], run: async () => ({ output: "ok" }) }`,
+    `export const meta = { name: "${flowName}", description: "fixture" }\nreturn { output: "ok" }\n`,
   )
 }
 
@@ -48,7 +48,7 @@ function refresh() {
 }
 
 test("init 全量：新文件注册，registry 可解析", async () => {
-  await writeFlow("alpha.mjs", "alpha")
+  await writeFlow("alpha.js", "alpha")
   const result = await refresh()
   assert.deepEqual(result.registered.map((r) => `${r.id}@${r.version}`), ["alpha@1.0.0"])
   assert.deepEqual(result.errors, [])
@@ -56,7 +56,7 @@ test("init 全量：新文件注册，registry 可解析", async () => {
 })
 
 test("幂等：再次重扫已注册的同 id@version 跳过（非错误）", async () => {
-  await writeFlow("alpha.mjs", "alpha")
+  await writeFlow("alpha.js", "alpha")
   await refresh()
   const again = await refresh()
   assert.deepEqual(again.registered, [])
@@ -64,34 +64,38 @@ test("幂等：再次重扫已注册的同 id@version 跳过（非错误）", as
 })
 
 test("增量：重扫拾取新写的文件（不重启场景）", async () => {
-  await writeFlow("alpha.mjs", "alpha")
+  await writeFlow("alpha.js", "alpha")
   await refresh()
-  await writeFlow("beta.mjs", "beta")
+  await writeFlow("beta.js", "beta")
   const result = await refresh()
   assert.deepEqual(result.registered.map((r) => r.id), ["beta"])
   assert.equal(registry.get("beta")?.id, "beta")
   assert.equal(registry.get("alpha")?.id, "alpha")
 })
 
-test("升 version：新文件同 id 高版本注册，latest 切换（旧版本共存）", async () => {
-  await writeFlow("alpha.mjs", "alpha", "1.0.0")
-  await refresh()
-  await writeFlow("alpha-v2.mjs", "alpha", "2.0.0")
+test("v0.9.0 单形态：flows 里的 .mjs 报错不装载，.js 照常注册", async () => {
+  await writeFlow("alpha.js", "alpha")
+  await fs.writeFile(
+    path.join(flowsDir, "legacy.mjs"),
+    `export default { id: "legacy-mjs", version: "1.0.0", run: async () => ({ output: "ok" }) }`,
+  )
   const result = await refresh()
-  assert.deepEqual(result.registered.map((r) => `${r.id}@${r.version}`), ["alpha@2.0.0"])
-  assert.equal(registry.get("alpha")?.version, "2.0.0")
-  assert.equal(registry.get("alpha", "1.0.0")?.version, "1.0.0")
+  assert.deepEqual(result.registered.map((r) => r.id), ["alpha"])
+  assert.match(result.errors.join("\n"), /legacy\.mjs: \.mjs\/\.cjs workflow files were removed in v0\.9\.0/)
 })
 
 test("错误收集不阻断：坏文件 + 保留 id 各自报错，好文件照常注册", async () => {
-  await fs.writeFile(path.join(flowsDir, "broken.mjs"), `export default { id: "broken" `)
-  await writeFlow("reserved.mjs", "smoke")
-  await writeFlow("good.mjs", "good")
+  await fs.writeFile(
+    path.join(flowsDir, "broken.js"),
+    `export const meta = { name: "broken" }\nreturn { output: syntax error here\n`,
+  )
+  await writeFlow("reserved.js", "smoke")
+  await writeFlow("good.js", "good")
   const result = await refresh()
   assert.deepEqual(result.registered.map((r) => r.id), ["good"])
   const joined = result.errors.join("\n")
-  assert.match(joined, /broken\.mjs: failed to import/)
-  assert.match(joined, /reserved\.mjs: id "smoke" is reserved/)
+  assert.match(joined, /broken\.js: failed to import legacy script/)
+  assert.match(joined, /reserved\.js: id "smoke" is reserved/)
 })
 
 test("空入口：no-op 返回空结果", async () => {

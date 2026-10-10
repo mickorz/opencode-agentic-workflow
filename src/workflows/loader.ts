@@ -1,24 +1,16 @@
 /**
- * 代码 workflow 装载器 —— 用户自定义流程的 JS 模块形态（唯一形态）
+ * 代码 workflow 装载器 —— v1 js 脚本唯一形态（v0.9.0 起单一形态化）
  *
- * v0.6.0 产品决策：声明式 JSON 流程面下线（设计未定型，暂只保留代码流程）。
- * 历史 JSON 机器（validateWorkflow / toDefinition / 模板解析）在 git 历史与
- * dev-docs/design 中留档，重设计时再取。
+ * v0.6.0 产品决策：声明式 JSON 流程面下线（git 历史与 dev-docs/design 留档）。
+ * v0.9.0 产品决策（breaking）：defineWorkflow ESM 模块形态与 .mjs/.cjs 装载
+ * 路径移除——流程唯一形态 = v1 js 脚本（`export const meta = {...}` + 魔法全局
+ * `phase/agent/parallel/...` + 顶层 return）。放进 flows 的 .mjs/.cjs、
+ * defineWorkflow 模块、.json 全部 fail-loud 并给出改写指引。
  *
  * 装载契约：
- *   - 入口：.js / .mjs / .cjs 文件路径或目录（扫一层，忽略点开头文件）；相对 baseDir
- *   - v2 模块形态：default / definition / workflow 三形态之一，最小形状校验
- *     （id/version 非空字符串 + run 函数）
- *   - v1 脚本形态（v0.8.0）：`export const meta = {...}` + 魔法全局
- *     `phase/agent/parallel/...` + 顶层 return——legacy 适配分支装载
- *     （见 legacy-script.ts），不改写、不迁移
- *   - <pkg>/core 裸说明符重写（v0.6.0）：用户 flows 目录通常解析不到本包
- *     （包在 opencode 全局缓存，不在用户 node_modules 链上）——装载时把
- *     "<pkg>/core" 重写为插件自身 dist/core 的绝对 file URL 再导入，
- *     保证拿到与宿主同一模块实例（executor / ambient 状态已接线）。
- *     实现方式：同目录隐藏临时 .mjs（保留用户目录的相对/npm 解析语义）
- *     → import → 清理；目录不可写时回退 data: URL 导入。
- *   - .json 入口不再装载：显式文件或目录内 .json 都给出迁移提示（fail-loud）
+ *   - 入口：.js 文件路径或目录（扫一层，忽略点开头文件）；相对 baseDir
+ *   - v1 脚本形态：源码含 `export const meta` 且不含 `defineWorkflow`
+ *     （见 legacy-script.ts）——剥离 meta 包裹装载，不改写、不迁移
  *   - 错误语义：装载期文件级 skip+warn（不阻断其他文件与内置流程）
  *
  * 纪律：本文件属于 Core 侧资产装载，禁止 import OpenCode API
@@ -29,7 +21,7 @@ import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
 import { readdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { pathToFileURL } from "node:url"
 
 import type { WorkflowDefinition } from "../registry/definition.js"
 import type { AnyWorkflowDefinition } from "../registry/registry.js"
@@ -42,35 +34,24 @@ import {
   wrapLegacyModule,
 } from "./legacy-script.js"
 
-/** 代码流程模块扩展名 */
-const CODE_EXTENSIONS = [".js", ".mjs", ".cjs"] as const
+/** 代码流程文件扩展名（唯一） */
+const CODE_EXTENSIONS = [".js"] as const
 
 const JSON_REMOVED_HINT =
-  'JSON workflows were removed in v0.6.0 - convert to a .js/.mjs module (see README "代码流程")'
+  'JSON workflows were removed in v0.6.0 - rewrite as a v1 js script (see README "代码流程")'
 
-/** 用户代码里引用核心 API 的裸说明符（重写目标） */
-const PKG_CORE_SPEC = "@mickorz/opencode-agentic-workflow/core"
+const EXT_REMOVED_HINT =
+  ".mjs/.cjs workflow files were removed in v0.9.0 (only .js loads) - rename to .js and use the v1 script form (`export const meta = {...}` + 魔法全局 phase/agent/... + 顶层 return; see README \"代码流程\")"
 
-/** 本插件自身 core barrel 的绝对 file URL（惰性求值；dist 与 tsx src 两种布局兼容） */
-let cachedCoreUrl: string | undefined
-function coreBarrelUrl(): string {
-  if (cachedCoreUrl !== undefined) return cachedCoreUrl
-  const dir = path.dirname(fileURLToPath(import.meta.url))
-  for (const rel of ["../core/index.js", "../core/index.ts"]) {
-    const candidate = path.resolve(dir, rel)
-    if (existsSync(candidate)) {
-      cachedCoreUrl = pathToFileURL(candidate).href
-      return cachedCoreUrl
-    }
-  }
-  // 布局异常时按包结构兜底（装载报错会自行暴露路径问题）
-  cachedCoreUrl = pathToFileURL(path.resolve(dir, "../core/index.js")).href
-  return cachedCoreUrl
-}
+const MODULE_FORM_REMOVED_HINT =
+  'defineWorkflow ESM module workflows were removed in v0.9.0 - the only form is a v1 js script: `export const meta = { id, version, description }` + 魔法全局 (phase/agent/parallel/...) + 顶层 return (see README "代码流程")'
+
+const NOT_A_SCRIPT_HINT =
+  'missing `export const meta = {...}` - since v0.9.0 the only loaded form is a v1 js script (`export const meta` + 魔法全局 + 顶层 return; see README "代码流程")'
 
 /**
  * 解析入口路径列表为流程文件列表（目录 = 一层扫描，忽略点开头文件；
- * 不存在的入口报错；.json 给迁移提示不装载）。
+ * 不存在的入口报错；.json / .mjs / .cjs 给迁移提示不装载——fail-loud）。
  */
 async function expandEntries(entries: string[], baseDir: string): Promise<{ files: string[]; errors: string[] }> {
   const files: string[] = []
@@ -87,17 +68,24 @@ async function expandEntries(entries: string[], baseDir: string): Promise<{ file
       const names = (await readdir(resolved)).sort()
       const codeNames = names.filter(isCodeFile)
       for (const name of names) {
-        if (!name.startsWith(".") && name.endsWith(".json")) {
+        if (name.startsWith(".")) continue
+        if (name.endsWith(".json")) {
           errors.push(`${path.join(entry, name)}: ${JSON_REMOVED_HINT}`)
+        } else if (name.endsWith(".mjs") || name.endsWith(".cjs")) {
+          errors.push(`${path.join(entry, name)}: ${EXT_REMOVED_HINT}`)
         }
       }
       if (codeNames.length === 0) {
-        errors.push(`${entry}: directory has no workflow files (.js/.mjs/.cjs)`)
+        errors.push(`${entry}: directory has no workflow files (.js)`)
         continue
       }
       files.push(...codeNames.map((n) => path.join(resolved, n)))
     } else if (entry.endsWith(".json")) {
       errors.push(`${entry}: ${JSON_REMOVED_HINT}`)
+    } else if (entry.endsWith(".mjs") || entry.endsWith(".cjs")) {
+      errors.push(`${entry}: ${EXT_REMOVED_HINT}`)
+    } else if (!entry.endsWith(".js")) {
+      errors.push(`${entry}: not a workflow file (only .js loads since v0.9.0)`)
     } else {
       files.push(resolved)
     }
@@ -106,7 +94,8 @@ async function expandEntries(entries: string[], baseDir: string): Promise<{ file
 }
 
 /**
- * 在用户目录旁导入改写后的模块源（保留该文件其余相对/npm 解析语义）：
+ * 在用户目录旁导入包裹后的 legacy 脚本源（v1 脚本零 import，全局由包裹
+ * 注入；临时文件仅为获得与用户目录一致的解析基准）：
  * 同目录隐藏临时 .mjs → import → 清理；目录不可写时回退 data: URL。
  */
 async function importRewrittenSource(file: string, source: string): Promise<unknown> {
@@ -165,11 +154,10 @@ async function loadLegacyScriptModule(
 }
 
 /**
- * 装载代码流程模块：.js/.mjs/.cjs 动态 import，取
- * default / definition / workflow 三种导出形态之一，校验
- * WorkflowDefinition 最小形状（id/version 字符串 + run 函数）。
- * v1 脚本形态（export const meta + 魔法全局）走 legacy 适配分支。
- * 含 <pkg>/core 裸说明符重写（见文件头）。返回定义或错误文案（含文件名前缀）；不抛出。
+ * 装载代码流程（v0.9.0 起唯一形态 = v1 js 脚本）：
+ * 源码含 `export const meta` 且不含 `defineWorkflow` → legacy 适配分支；
+ * 其余（defineWorkflow 模块 / 无 meta 的普通模块）一律 fail-loud 给改写指引。
+ * 返回定义或错误文案（含文件名前缀）；不抛出。
  */
 async function loadCodeWorkflowModule(
   file: string,
@@ -185,51 +173,10 @@ async function loadCodeWorkflowModule(
   if (detectLegacyScript(source)) {
     return loadLegacyScriptModule(file, source)
   }
-
-  const coreUrl = coreBarrelUrl()
-  // 三种引用形态：from "<pkg>/core" / 副作用 import "<pkg>/core" / 动态 import("<pkg>/core")
-  const rewritten = source
-    .replace(/(\bfrom\s*)(["'])@mickorz\/opencode-agentic-workflow\/core\2/g, `$1"${coreUrl}"`)
-    .replace(/(\bimport\s*)(["'])@mickorz\/opencode-agentic-workflow\/core\2/g, `$1"${coreUrl}"`)
-    .replace(/(\bimport\s*\(\s*)(["'])@mickorz\/opencode-agentic-workflow\/core\2/g, `$1"${coreUrl}"`)
-
-  let mod: unknown
-  try {
-    if (!source.includes(PKG_CORE_SPEC)) {
-      // 未引用核心 API：原样导入（用户目录自身的相对/npm 解析语义保持不变）
-      mod = await import(pathToFileURL(file).href)
-    } else if (file.endsWith(".cjs")) {
-      return {
-        ok: false,
-        error: at(`imports "${PKG_CORE_SPEC}" but .cjs cannot be specifier-rewritten - rename to .mjs (ESM)`),
-      }
-    } else {
-      mod = await importRewrittenSource(file, rewritten)
-    }
-  } catch (error) {
-    return { ok: false, error: at(`failed to import (${error instanceof Error ? error.message : String(error)})`) }
+  if (source.includes("defineWorkflow")) {
+    return { ok: false, error: at(MODULE_FORM_REMOVED_HINT) }
   }
-  if (typeof mod !== "object" || mod === null) {
-    return { ok: false, error: at("module must export a workflow (default export or named `definition`)") }
-  }
-  const candidate = (mod as Record<string, unknown>).default ?? (mod as Record<string, unknown>).definition ?? (mod as Record<string, unknown>).workflow
-  if (typeof candidate !== "object" || candidate === null) {
-    return {
-      ok: false,
-      error: at("module must export a workflow (default export or named `definition`): export defineWorkflow({...}) result"),
-    }
-  }
-  const def = candidate as { id?: unknown; version?: unknown; run?: unknown }
-  if (typeof def.id !== "string" || def.id.length === 0) {
-    return { ok: false, error: at("workflow.id must be a non-empty string") }
-  }
-  if (typeof def.version !== "string" || def.version.length === 0) {
-    return { ok: false, error: at("workflow.version must be a non-empty string (semver; bump on structure change)") }
-  }
-  if (typeof def.run !== "function") {
-    return { ok: false, error: at("workflow.run must be a function: async run(args, ctx)") }
-  }
-  return { ok: true, definition: candidate as WorkflowDefinition }
+  return { ok: false, error: at(NOT_A_SCRIPT_HINT) }
 }
 
 /**

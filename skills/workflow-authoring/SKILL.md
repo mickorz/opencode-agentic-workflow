@@ -169,7 +169,7 @@ topic=<从需求取的小而真实样例>, checkpointMode=auto-approve`（headle
 | `legacy scripts may only contain export const meta` | 多余的 export——去掉（唯一导出就是 meta） |
 | `meta.name must be a non-empty snake_case string` | id 形状不对（如 `five-sentences`）——改 `five_sentences` |
 | `JSON workflows were removed in a v0.6.0` | flows 目录里还有 .json——按上面映射表改写成 js 脚本 |
-| 手滑写成了 `.mjs` / defineWorkflow 模块 | 唯一形态是 js 脚本：删除重写（用户产品决策 2026-10-10） |
+| `.mjs/.cjs workflow files were removed in v0.9.0` / `defineWorkflow ESM module workflows were removed in v0.9.0` | 手滑写成了 `.mjs` / defineWorkflow 模块——改名 `.js` 并改写成 v1 脚本形态（唯一形态，用户产品决策 2026-10-10；错误信息自带改写指引） |
 | `workflow not found` + `flows load errors` 清单 | 文件没注册上：按指名错误修文件（语法/形状/保留 id）直接重试，无需重启 |
 | 改了已注册流程但不生效 | 已装载文件的修改需重启；新文件才能被重扫即时拾取 |
 | `id "..." is reserved by a built-in` | 换个 id（内置：smoke / reliable / artifact / feature-development） |

@@ -4,116 +4,47 @@
 > 规则全部来自真实事故（titlecase 旗舰首跑五连坑，见
 > `dev-docs/experience/titlecase-feature-run五连坑.md`）与内置 workflow 的实践。
 >
-> 两条路径：**声明式 JSON**（零代码，插件 `workflows` 配置即装载，见下章，
-> 适合直线流程）与 **代码式 `WorkflowDefinition`**（本仓库内置流程的做法，
-> 适合 parallel/retry/fallback 等复杂控制流）。
+> **v0.9.0 起流程唯一形态 = v1 js 脚本**（`export const meta` + 魔法全局 +
+> 顶层 return）。完整 API 与编写规范见随包分发的
+> `skills/workflow-authoring/SKILL.md`；本文件沉淀跨形态都成立的工程纪律。
 
-## 零代码自定义 workflow（声明式 JSON）
+## 自定义流程（v1 js 脚本）
 
-插件配置 `workflows`（≥0.5.0）指向 .json 文件或目录（相对项目目录），
-init 时自动装载注册——journal / trace / metrics / resume / workspace
-隔离 / `checkpointMode` 覆盖对自定义流程**全部同样生效**。
+插件配置 `workflows` 指向目录（相对项目目录，缺省探测 `flows/`），init 时
+自动装载注册——journal / trace / metrics / resume / workspace 隔离 /
+`checkpointMode` 覆盖对自定义流程**全部同样生效**。
 
-```jsonc
-// opencode.json 插件 options 内：
-"workflows": ["flows"]           // flows/ 目录下每个 *.json 一个流程
+```js
+// flows/my-flow.js —— 唯一装载形态
+export const meta = { name: 'my_flow', description: '给工具枚举看的一句话' }
 
-// flows/my-flow.json：
-{
-  "id": "my-flow",               // kebab-case；工具 flow 参数即它；不得撞内置 id
-  "version": "1.0.0",            // 缺省 1.0.0
-  "description": "给工具枚举看的一句话",
-  "args": { "...": "可选，JSON Schema；缺省 = 仅 topic" },
-  "steps": [
-    { "name": "draft", "agent": "针对 {{topic}} 的分析…（禁止调用 workflow 工具）",
-      "model": "glm/glm-5.3-flash", "timeoutMs": 300000, "retries": 1 },  // ← agent 步可选调用级选项
-    { "name": "review", "verify": { "artifact": "{{steps.draft}}", "criteria": "合格标准" } },
-    { "name": "file",  "fileExists": "out.md" },          // 相对 workspaceRoot
-    { "name": "child", "subflow": "other-flow", "args": { "topic": "{{topic}}" } },  // ← 嵌套已注册流程（P2-9）
-    { "name": "fanout", "pipeline": "分析 {{item}}（主题 {{topic}}）",             // ← 条目并发（P5）
-      "items": ["{{topic}}-甲", "{{topic}}-乙"], "outputAs": "reports" },
-    { "name": "fastest", "race": ["方案A：{{topic}}", "方案B：{{topic}}"] },        // ← 竞速首胜（P5）
-    { "name": "gate",  "checkpoint": "「{{topic}}」已生成，批准？" }
-  ],
-  "output": "定稿：{{steps.draft}}"   // 缺省 = 最后一个产出型步骤（agent/race 原文、pipeline 为结果数组 JSON）
-}
+phase('Draft')
+const draft = await agent(
+  `针对 ${args.topic} 的分析…（禁止调用 workflow / workflow_metrics 工具）`,
+  { model: 'glm/glm-5.3-flash', timeoutMs: 300000, retries: 1 },
+)
+
+phase('Gate')
+check(() => fileExists('out.md'), 'out.md 未生成')
+const approved = await checkpoint(`「${args.topic}」已生成，批准？`)
+
+return { output: `定稿：${draft}` }
 ```
 
-**步骤七类**（互斥键，恰好一个）：`agent`（子 agent，输出供后续 `{{steps.<name>}}`
-引用）、`checkpoint`（审批门）、`verify`（语义评审，否决即失败）、`fileExists`
-（存在性断言）、`subflow`（嵌套另一个已注册流程）、`pipeline`（条目并发
-fan-out）、`race`（多提示竞速取首胜）。模板变量：
-`{{topic}}`、`{{args.x}}`、`{{steps.<name>}}`（pipeline 提示内另有 `{{item}}`
-引用条目）；未知变量 = 该步骤失败（journal 可见，绝不静默空串）。
-
-**subflow 步**（P2-9）：`"subflow": "flow-id"` + 可选 `args`（原始值或模板
-混合的对象）。子 run 有独立 journal（`parentRunId`/`depth` lineage；进度
-面板缩进挂树）；输出进 `{{steps.<name>}}`；失败按普通步骤失败处理
-（父 run fail-fast）。gate/workspace 继承父 run；深度上限 3；需要插件
-配置 `journalDir`。代码式对应 `ctx.subflow(id, args, { version })`。
-
-**pipeline 步**（条目并发 fan-out）：`"pipeline": "<每条目提示模板>"` +
-`items`（条目模板数组，每项解析后原样作为条目值）+ 可选 `outputAs`
-（结果并入 state 的键，缺省 = 步骤名）、`onFailure`（`"fail-fast"` |
-`"continue"`，与代码式同语义）、`model`/`timeoutMs`/`retries`（每条目
-同规则透传）。提示里 `{{item}}` 引用当前条目（先字面替换再走通用模板）。
-条目间并发（受插件 `concurrency` 信号量约束）、单阶段；结果为**与 items
-对齐的数组**（`{{steps.<name>}}` 拿到的是它的 JSON 串）。代码式对应
-`pipeline(items, stages, { onFailure })`。
-
-**race 步**（多提示竞速取首胜）：`"race": ["<提示模板>", …]`（≥2，并发起跑，
-首个成功者输出胜出、败者不再等待——与 run 控制同一诚实语义）+ 可选
-`outputAs`。全败抛 `WorkflowRaceError`（聚合全部原因，fail-loud）。
-代码式对应 `race(branches)`。
-
-**并发步骤的 resume 粒度**：pipeline/race 各占一个 journal 步骤单元——
-completed 即整体跳过；中断后重跑整步（条目级断点不落盘，与 sequence
-前缀语义一致）。需要条目级恢复就拆成多个 subflow 步或用代码式流程。
-
-**verify 步增强**（P2-11）：`reviewers: N`（N 个同质评审员，默认 1）；
-`threshold: 0.5`（投票阈值 (0,1]，pass 占比达标即通过，缺省 1 = 全票）；
-`lenses: [{ name, criteria }]`（多视角——一个视角一个评审员、各按专属标准
-评，覆盖 reviewers/criteria；与 threshold 组合成视角投票）。代码式对应
-`verify(artifact, { reviewers, criteria, passThreshold, lenses })`。
-
-**agent 步调用级选项**（P1-4，仅 agent 步可用）：
-`model`（`"providerID/modelId"`，覆盖插件级子会话模型）、`timeoutMs`
-（单次尝试超时；超时不硬杀底层会话，只是不再等待）、`retries`
-（失败重试次数，对超时同样生效——每次尝试独立计时）。
-代码式流程对应 `agent(prompt, { model, timeoutMs, retries, retryDelayMs })`。
-
-**结构化输出**（P1-6，代码式）：`agent(prompt, { schema })` ——prompt 自动
-追加 JSON 契约指令，输出经解析 + schema 校验后挂 `result.structured`；
-解析/校验失败抛错且**可被 retries 重试**（校验在重试环内，每次重试重新
-生成）。注意：OpenCode v2 会话 API 无原生结构化输出（v1 的
-`format: "json_schema"` 在 v2 不存在），这是 prompt 约束 + 校验兜底的
-shim，非宿主级保证——schema 简单（数值/枚举）时直接要「只回数字」更稳。
-
-**声明式 author 的纪律**（对应下方通用纪律的适用子集）：
-
-- `agent` prompt 里**仍要写「禁止调用 workflow / workflow_metrics 工具」**
-  ——递归自饿死事故与装载方式无关（通用纪律 4）
-- 增删/重排 steps = 改版本契约，**必须升 `version`**（resume 按精确版本解析）
-- 坏文件只会 warn+跳过，不阻断其他流程——修好文件重启 OpenCode 即重新装载
-- 需要 parallel / 条件分支 / 重试编排？声明式 v1 只有直线 sequence，
-  复杂控制流走代码式（`src/workflows/` 参考内置实现）——组合子清单：
-  `sequence`（顺序链）、`parallel`（并发三模式）、`retry`（防锤击重试）、
-  `fallback`（候选降级）、`pipeline`（多条目 × 多阶段流水线）、`race`
-  （首达取胜，全败聚合抛错）、`judgePanel`（N 评委打分选优，0-10 数值
-  解析失败=该评委失败、绝不静默丢分）。嵌套组合的 journal 断点续跑仍
-  限定 sequence（resumeSequence 的既有边界），声明式嵌套流程需先设计
-  resume 语义再排期。
-
-### 让主 agent 替你写：`workflow_define` 工具（零文件编辑）
-
-不必手写 JSON：直接在对话里描述需求，主 agent 会把需求整理成声明式 JSON
-并调用 `workflow_define`——**校验 → 立即注册 → 落盘**到插件 `workflows`
-配置的目录，当场即可用 `workflow` 工具调用，之后每次启动自动装载。
-落盘目标目录不存在会自动创建。
-
-版本语义与手写路径一致：内容相同的重复 define 幂等成功；同 id@version
-不同内容被拒绝并提示升 `version`（旧版本 journal 的 resume 仍按精确版本解析）。
-
+- `meta.name`：非空 snake_case，不得撞内置 id（smoke / reliable / artifact /
+  feature-development）；版本恒 `1.0.0`
+- `.mjs` / `.cjs` / defineWorkflow 模块 / JSON 放进 flows 会 fail-loud
+  并附改写指引（v0.6.0 移除 JSON，v0.9.0 移除模块形态）
+- 零 import：`phase/agent/parallel/pipeline/sequence/fallback/race/check/
+  fileExists/commandSuccess/log/args/setConcurrency/verify/judgePanel/retry/
+  checkpoint/workflow/console/version` 都是适配层注入的魔法全局
+- 嵌套：`await workflow('./other-flow.js', { topic: args.topic })`——子 run
+  独立 journal（`parentRunId`/`depth` lineage；进度面板缩进挂树），
+  gate/workspace 继承，深度上限 3，需要插件配置 `journalDir`
+- 保存即用：会话中途写好的**新** `.js` 文件无需重启当场可跑（未知 id 触发
+  一次增量重扫）；改动已装载文件需重启（Node ESM 缓存按路径）
+- agent 调用级选项：`model` / `timeoutMs` / `retries`（结构化输出
+  `schema` 是 prompt 约束 + 校验兜底的 shim，非宿主级保证）
 
 ## 通用结构纪律
 

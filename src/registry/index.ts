@@ -9,7 +9,6 @@ export type {
   StepFn,
   ArgsSchema,
 } from "./definition.js"
-export { defineWorkflow } from "./definition.js"
 export { validateArgs } from "./schema.js"
 export {
   WorkflowRegistry,

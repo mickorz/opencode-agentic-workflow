@@ -79,10 +79,3 @@ export interface WorkflowDefinition<TArgs = unknown, TResult = unknown> {
   /** 入口：args（已经校验）+ ctx -> 结果（约定带 output 文本字段） */
   run(args: TArgs, context: WorkflowContext): Promise<TResult>
 }
-
-/** defineWorkflow：恒等函数，仅收紧类型（DX 糖） */
-export function defineWorkflow<TArgs = unknown, TResult = unknown>(
-  definition: WorkflowDefinition<TArgs, TResult>,
-): WorkflowDefinition<TArgs, TResult> {
-  return definition
-}

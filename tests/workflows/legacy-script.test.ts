@@ -162,7 +162,7 @@ test("validateLegacyMeta：name/description 形状校验", () => {
 
 // ── 装载 ──────────────────────────────────────────────────────────────
 
-test("装载：v1 .js 与 v2 .mjs 同目录共存，各按形态装载", async () => {
+test("装载：v0.9.0 单形态——v1 .js 装载，同目录 .mjs fail-loud 不装载", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-legacy-mix-"))
   await fs.writeFile(path.join(dir, "legacy_flow.js"), SMOKE_V1, "utf8")
   await fs.writeFile(
@@ -171,9 +171,8 @@ test("装载：v1 .js 与 v2 .mjs 同目录共存，各按形态装载", async (
     "utf8",
   )
   const { definitions, errors } = await loadCustomWorkflows([dir], dir)
-  assert.deepEqual(errors, [])
-  const ids = definitions.map((d) => d.id).sort()
-  assert.deepEqual(ids, ["modern", "smoke_test"])
+  assert.deepEqual(definitions.map((d) => d.id), ["smoke_test"])
+  assert.match(errors.join("\n"), /modern_flow\.mjs: \.mjs\/\.cjs workflow files were removed in v0\.9\.0/)
 })
 
 test("装载：meta.name 非法 → 文件级 skip + 明确错误", async () => {

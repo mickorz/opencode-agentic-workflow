@@ -220,9 +220,9 @@ export default Plugin.define({
       .register(artifactWorkflow())
       .register(featureDevelopmentWorkflow({ checkCommand: options.checkCommand }))
 
-    // 自定义 workflow（代码式 JS 模块）：options.workflows 路径（.js/.mjs/.cjs
-    // 文件或目录，相对项目目录）；未配置时缺省探测项目 flows/ 目录（存在即装载，
-    // 零配置开箱）。文件级错误 warn+跳过（观测/装载不能成为主链路故障源）；
+    // 自定义 workflow（v1 js 脚本，唯一形态）：options.workflows 路径（.js
+    // 文件或目录，相对项目目录）；未配置时缺省探测项目 flows/ 目录（存在即
+    // 装载，零配置开箱）。文件级错误 warn+跳过（观测/装载不能成为主链路故障源）；
     // 必须在工具注册前完成（流程清单进工具描述）。
     // v0.6.1：装载注册抽到 custom-flows.ts——init 全量 + 运行期未知 id 增量
     // 重扫共用同一语义
@@ -406,7 +406,7 @@ export default Plugin.define({
               description:
                 "Workflow id from the Available workflows list above (default " +
                 "smoke). An unknown id triggers ONE rescan of the flows " +
-                "directory before failing - a workflow .mjs written after " +
+                "directory before failing - a workflow .js written after " +
                 "startup becomes runnable WITHOUT restart. Still-unknown ids " +
                 "fail with the list of available ids",
             },
@@ -502,7 +502,7 @@ export default Plugin.define({
           // 合并转发（引擎按 argsSchema 校验，required/类型不符即报具体问题）
           const workflowArgs = buildWorkflowArgs(parsed.topic, parsed.args)
 
-          // v0.6.1 即时可用：未知 id 先增量重扫一次 flows（刚写好的 .mjs 无需
+          // v0.6.1 即时可用：未知 id 先增量重扫一次 flows（刚写好的 .js 无需
           // 重启）。resume 不触发（flow 由 journal 精确解析）；已知 id 不触发
           //（不会隐式热替换已注册版本——改文件升 version 走重启，见 skill）
           const resuming =
