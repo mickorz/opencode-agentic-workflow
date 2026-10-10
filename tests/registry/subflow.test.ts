@@ -108,7 +108,7 @@ test("成功链路：子 run 独立 journal + parentRunId lineage；输出回传
       argsSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
     }),
   )
-  let childResult: { runId: string; output: string } | undefined
+  let childResult: { runId: string; output: string; result?: unknown } | undefined
   registry.register(
     def("parent", [
       async (ctx) => {
@@ -120,6 +120,8 @@ test("成功链路：子 run 独立 journal + parentRunId lineage；输出回传
 
   const parent = await startWorkflow(registry, store, "parent", { topic: "t" })
   assert.equal(parent.output, "wrapped:child-output")
+  // result = 子 run 返回值本体（test def helper 按惯例包 {output}）
+  assert.deepEqual(childResult!.result, { output: "child-output" })
 
   // lineage：子 run 的 journal 指回父 run
   const childRun = await store.getRun(childResult!.runId)
@@ -132,6 +134,27 @@ test("成功链路：子 run 独立 journal + parentRunId lineage；输出回传
   assert.ok(parentRun)
   assert.equal(parentRun.parentRunId, undefined)
   assert.equal(parentRun.status, "completed")
+})
+
+test("result 保真：子 run 返回 {output:text} 时 subflow 直传本体（不丢结构）", async () => {
+  const registry = makeRegistry()
+  // def helper 会把步骤值包成 {output: string} 返回——即子 run 本体
+  // 恰为 v1 惯用形状 {output:"句子"}。toOutput 抽平 output 供显示，
+  // subflow().result 必须携带本体。
+  registry.register(def("child_obj", [() => Promise.resolve("句子本体")]))
+  let observed: { output: string; result?: unknown } | undefined
+  registry.register(
+    def("parent", [
+      async (ctx) => {
+        observed = await ctx.subflow!("child_obj", {})
+        return "done"
+      },
+    ]),
+  )
+
+  await startWorkflow(registry, store, "parent", {})
+  assert.equal(observed!.output, "句子本体") // 抽平后的显示字符串
+  assert.deepEqual(observed!.result, { output: "句子本体" }) // 本体保真
 })
 
 test("失败传播：子 run 失败 -> 父步骤失败（fail-fast），双方 journal 都 failed", async () => {

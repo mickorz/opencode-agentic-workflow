@@ -55,6 +55,13 @@ export interface WorkflowRunResult {
   runId: string
   workflow: WorkflowIdentity
   output: string
+  /**
+   * 子流程返回值本体（内存直传，保真）。output 是 toOutput 抽平后的
+   * 显示用字符串——`{output:"text"}` 形状会被抽平成纯文本，结构不可
+   * 逆；需要原始结构的消费方（legacy workflow()）读这个字段。
+   * 仅 start/resume 内存链路携带；跨进程/旧 journal 重建时缺省。
+   */
+  result?: unknown
 }
 
 function toOutput(result: unknown): string {
@@ -108,7 +115,8 @@ function createContext(input: {
             const result = await startWorkflow(registry, store, id, args ?? {}, {
               ...(options?.version !== undefined ? { version: options.version } : {}),
             })
-            return { runId: result.runId, output: result.output }
+            // result 字段内存直传子流程返回值本体（legacy workflow() 保真用）
+            return { runId: result.runId, output: result.output, result: result.result }
           },
         }
       : {}),
@@ -324,7 +332,7 @@ async function runToCompletion(
       await journal.complete()
     }
     await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
-    return { runId, workflow: identity, output: toOutput(result) }
+    return { runId, workflow: identity, output: toOutput(result), result }
   } catch (error) {
     // P1-3：用户协作式停止 -> aborted（与失败可区分：主动停 ≠ 出错）；
     // 其余失败 -> failed。两者都清理失败现场并统一抛 WorkflowExecutionError
@@ -435,7 +443,7 @@ export async function resumeWorkflow(
     // 允许在收口后执行——幂等 resume 依赖清理后字段被清掉）
     await settleAfterSuccess(store, runId)
     await cleanupWorkspace(store, runId, workspace, cleanupPolicy, true)
-    return { runId, workflow: identity, output: toOutput(result) }
+    return { runId, workflow: identity, output: toOutput(result), result }
   } catch (error) {
     // P1-3：resume 途中被 stop -> aborted（其余失败维持 failed 语义）
     if (error instanceof RunAbortedError) {

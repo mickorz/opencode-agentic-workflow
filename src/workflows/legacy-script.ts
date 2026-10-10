@@ -755,8 +755,11 @@ export function buildLegacyDefinition(
           }
           const sub = await ctx.subflow!(resolved.id, clonedSubArgs as object)
           // v1 语义：workflow() 返回子流程的返回值本体（对象直取字段）。
-          // v2 subflow 契约给 output 字符串（toOutput：对象已 JSON 化）——
-          // 可解析则还原为对象，纯文本保持字符串。
+          // 优先内存直传的 sub.result（保真，`{output:"text"}` 等形状不丢结构）；
+          // 缺失时（跨进程/旧链路重建）回落解析 sub.output：toOutput 对
+          // {output:"text"} 形状会抽平成纯文本——此时结构已不可逆，只能按
+          // 纯文本返回（与 v1 的分歧点，见 dev-examples 覆盖矩阵）。
+          if (sub.result !== undefined) return sub.result
           try {
             const parsed = JSON.parse(sub.output) as unknown
             if (parsed !== null && typeof parsed === "object") return parsed

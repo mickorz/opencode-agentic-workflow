@@ -52,7 +52,7 @@ export interface WorkflowContext {
     id: string,
     args?: TArgs,
     options?: { version?: string },
-  ): Promise<{ runId: string; output: string }>
+  ): Promise<{ runId: string; output: string; result?: unknown }>
 }
 
 export interface RunStepsOptions {

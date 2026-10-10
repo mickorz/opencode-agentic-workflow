@@ -55,7 +55,10 @@ async function runV1Script(
   options?: {
     executor?: AgentExecutor
     gate?: { ask: (req: { label: string; message: string }) => Promise<{ approved: boolean; reason?: string }> }
-    subflow?: (id: string, args?: unknown) => Promise<{ runId: string; output: string }>
+    subflow?: (
+      id: string,
+      args?: unknown,
+    ) => Promise<{ runId: string; output: string; result?: unknown }>
     workspaceRoot?: string
     args?: Record<string, unknown>
   },
@@ -444,6 +447,37 @@ return spec.brief
     subflow: async () => ({ runId: "sub_2", output: JSON.stringify({ brief: "一句话规格" }) }),
   })
   assert.equal(result, "一句话规格")
+})
+
+test("workflow：subflow 内存直传 result 保真（{output:text} 形状不丢结构）", async () => {
+  const source = `export const meta = { name: 'wf_direct' }
+const r = await workflow('sentence_a')
+return { got: r.output, kind: typeof r }
+`
+  const childReturn = { output: "海是地球表面广阔相连的咸水体。" }
+  const { result } = await runV1Script(source, {
+    executor: echoExecutor(),
+    // 内存链路：output 已被 toOutput 抽平，result 携带本体
+    subflow: async () => ({
+      runId: "sub_3",
+      output: childReturn.output,
+      result: childReturn,
+    }),
+  })
+  assert.deepEqual(result, { got: "海是地球表面广阔相连的咸水体。", kind: "object" })
+})
+
+test("workflow：result 缺失时回落 output 解析（跨进程/旧链路兼容）", async () => {
+  const source = `export const meta = { name: 'wf_fallback' }
+const r = await workflow('calc')
+return typeof r === 'string' ? r : r.output
+`
+  // 旧链路只有抽平后的 output（{output:"text"} 已不可逆）→ 按纯文本返回
+  const { result } = await runV1Script(source, {
+    executor: echoExecutor(),
+    subflow: async () => ({ runId: "sub_4", output: "纯文本句子" }),
+  })
+  assert.equal(result, "纯文本句子")
 })
 
 test("workflow：路径形与对象形引用经装载索引解析（脚本一字不改）", async () => {
