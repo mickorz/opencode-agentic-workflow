@@ -641,8 +641,8 @@ test("renderNodeRows: 步骤级节点——状态头/元数据/prompt/result/会
   assert.equal(rows[0]?.text, "✓ gather  completed")
   assert.equal(rows[0]?.bold, true)
   assert.equal(rows[0]?.tone, "success")
-  // 元数据：model · 时长 · token（in/out）
-  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s · 1.2k tok (in 700 / out 500)")
+  // 元数据：model · 时长（v0.10.4 token 撤出节点视图）
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s")
   assert.equal(rows[1]?.tone, "muted")
   // 标识符：run · workflow · 会话数
   assert.equal(rows[2]?.text, "run run_d · demo@1.0.0 · 1 session(s)")
@@ -828,7 +828,7 @@ test("v0.10.0 节点视图：状态头带 (2/3)，元数据时长带上限", () 
   const rows = renderNodeRows({ detail, step: "gather" }, 20_000)
   assert.equal(rows[0]?.text, "✓ gather  completed (2/3)")
   // 元数据：时长 12s（1k→13k）带上限 1m
-  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s/1m · 1.2k tok (in 700 / out 500)")
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s/1m")
 })
 
 test("v0.10.0 节点视图：失败步 (3/3) 耗尽语义；live 快照与 detail 双源取值", () => {
@@ -851,5 +851,5 @@ test("v0.10.0 节点视图：失败步 (3/3) 耗尽语义；live 快照与 detai
 test("v0.10.0 节点视图：旧 journal（无新字段）不渲染 attempt/上限（向后兼容）", () => {
   const rows = renderNodeRows({ detail: detailFixture(), step: "gather" }, 20_000)
   assert.equal(rows[0]?.text, "✓ gather  completed")
-  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s · 1.2k tok (in 700 / out 500)")
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s")
 })

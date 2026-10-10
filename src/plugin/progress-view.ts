@@ -626,10 +626,9 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
       bold: true,
     })
 
-    // 元数据：model · 时长（带上限 10s/1m）· token（in/out）
+    // 元数据：model · 时长（带上限 10s/1m）——token 展示已全面撤出 TUI（v0.10.4）
     const started = liveStep?.startedAt ?? stepDetail?.startedAt
     const finished = liveStep?.completedAt ?? stepDetail?.completedAt
-    const usage = stepDetail?.usage
     pushMeta([
       stepDetail?.model,
       started !== undefined
@@ -637,9 +636,6 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
             formatDuration(Math.max(0, (finished ?? now) - started)),
             attemptMeta.timeoutMs,
           )
-        : undefined,
-      usage !== undefined
-        ? `${formatTokens(usageToTokens(usage))} tok (in ${formatTokens(usage.input)} / out ${formatTokens(usage.output)})`
         : undefined,
     ])
 
