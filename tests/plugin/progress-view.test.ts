@@ -10,6 +10,7 @@ import { test } from "node:test"
 import {
   formatDuration,
   renderDetailRows,
+  renderNodeRows,
   renderDetailSection,
   renderHomeFooterRows,
   renderPanelRows,
@@ -581,4 +582,116 @@ test("renderSessionSection: 属于板上最新 run 才输出，否则空", () =>
   assert.deepEqual(renderSessionSection(runs, { ...session, rows: [] }), [])
   assert.deepEqual(renderSessionSection(runs, undefined), [])
   assert.deepEqual(renderSessionSection([], session), [])
+})
+
+/* ---------------- v0.8.9 节点详情视图 renderNodeRows ---------------- */
+
+function detailFixture(): RunDetail {
+  return {
+    runId: "run_d",
+    workflow: { id: "demo", version: "1.0.0" },
+    status: "completed",
+    startedAt: 1_000,
+    completedAt: 43_000,
+    args: '{"topic":"t"}',
+    steps: [
+      {
+        index: 0,
+        name: "gather",
+        status: "completed",
+        startedAt: 1_000,
+        completedAt: 13_000,
+        input: "collect facts about X",
+        output: "hello world",
+        usage: { input: 700, output: 500, reasoning: 0 },
+        model: "glm-5.3-flash",
+        sessionIDs: ["ses_agent_1"],
+      },
+      {
+        index: 1,
+        name: "check",
+        status: "failed",
+        startedAt: 13_000,
+        completedAt: 16_200,
+        error: "WorkflowCheckError: no",
+      },
+    ],
+  }
+}
+
+test("renderNodeRows: 步骤级节点——状态头/元数据/prompt/result/会话回放/键位提示", () => {
+  const rows = renderNodeRows(
+    {
+      detail: detailFixture(),
+      step: "gather",
+      replay: {
+        sessionID: "ses_agent_1",
+        messages: [
+          { type: "user", text: "collect facts" },
+          { type: "assistant", text: "done" },
+        ],
+      },
+    },
+    20_000,
+  )
+  // 状态头：粗体 + 语义色
+  assert.equal(rows[0]?.text, "✓ gather  completed")
+  assert.equal(rows[0]?.bold, true)
+  assert.equal(rows[0]?.tone, "success")
+  // 元数据：model · 时长 · token（in/out）
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s · 1.2k tok (in 700 / out 500)")
+  assert.equal(rows[1]?.tone, "muted")
+  // 标识符：run · workflow · 会话数
+  assert.equal(rows[2]?.text, "run run_d · demo@1.0.0 · 1 session(s)")
+  // prompt 预览 + result 正文
+  assert.ok(rows.some((r) => r.text === "prompt: collect facts about X" && r.tone === "muted"))
+  assert.ok(rows.some((r) => r.text === "hello world"))
+  // 会话回放：头行 + 消息行
+  assert.ok(rows.some((r) => r.text === "gather · ses_agent_1" && r.tone === "muted"))
+  assert.ok(rows.some((r) => r.text === "❯ collect facts"))
+  assert.ok(rows.some((r) => r.text === "· done" && r.tone === "muted"))
+  // 键位提示（有会话 → 含 Open Session）
+  assert.equal(rows[rows.length - 1]?.text, "Enter Open Session · ←/→ 切换节点 · Esc 返回")
+})
+
+test("renderNodeRows: 失败步骤走 Error 正文；无会话时提示无 Enter", () => {
+  const rows = renderNodeRows({ detail: detailFixture(), step: "check" }, 20_000)
+  assert.equal(rows[0]?.text, "✗ check  failed")
+  assert.equal(rows[0]?.tone, "error")
+  assert.ok(rows.some((r) => r.text === "Error: WorkflowCheckError: no" && r.tone === "error"))
+  assert.equal(rows[rows.length - 1]?.text, "←/→ 切换节点 · Esc 返回")
+})
+
+test("renderNodeRows: 只有 live 快照时 running 态显示 No result yet", () => {
+  const rows = renderNodeRows(
+    {
+      run: snapshot({ runId: "run_live", status: "running" }),
+      detail: undefined,
+      step: "implement",
+    },
+    10_000,
+  )
+  // live 快照有该步骤：状态头用实时状态；无 detail -> No result yet
+  assert.equal(rows[0]?.text, "▶ implement  running")
+  assert.equal(rows[0]?.tone, "warning")
+  assert.ok(rows.some((r) => r.text === "No result yet" && r.tone === "warning"))
+})
+
+test("renderNodeRows: run 级节点——概况 + 步骤清单 + args", () => {
+  const rows = renderNodeRows({ detail: detailFixture() }, 20_000)
+  assert.equal(rows[0]?.text, "✓ demo@1.0.0  completed")
+  assert.equal(rows[0]?.bold, true)
+  assert.equal(rows[0]?.tone, "success")
+  assert.equal(rows[1]?.text, "42.0s · 1/2 steps")
+  assert.equal(rows[2]?.text, "run run_d")
+  assert.ok(rows.some((r) => r.text === 'args: {"topic":"t"}' && r.tone === "muted"))
+  assert.ok(rows.some((r) => r.text === "  ✓ gather  12.0s"))
+  assert.ok(rows.some((r) => r.text === "  ✗ check  3.2s" && r.tone === "error"))
+  // 步骤带会话 → 提示 Enter
+  assert.equal(rows[rows.length - 1]?.text, "Enter Open Session · Esc 返回")
+})
+
+test("renderNodeRows: 快照与 journal 均无记录 -> 找不到数据提示", () => {
+  const rows = renderNodeRows({}, 20_000)
+  assert.ok(rows.some((r) => r.text === "找不到该节点的数据（快照与 journal 均无记录）"))
 })

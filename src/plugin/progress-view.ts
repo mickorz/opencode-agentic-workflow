@@ -40,6 +40,8 @@ export interface PanelRow {
   bold?: boolean
   /** 该行所属 run（折叠交互的归属键；头行 = 可折叠目标） */
   runId?: string
+  /** 步骤行名（点击进入节点详情视图；subflow 步骤亦按步骤名查） */
+  stepName?: string
   /** 可折叠 run 头行标记（TUI 层挂点击切换；行文本已带 ▶/▼ 指示） */
   collapsible?: boolean
   /** 本行当前是否处于折叠态（点击切换的目标态 = !collapsed） */
@@ -258,6 +260,7 @@ export function renderPanelRows(
             text: truncate(`  ${step.glyph} ${step.label}${duration}${stepMetaSuffix(step)}`, options?.maxWidth),
             tone: step.tone,
             runId: run.runId,
+            stepName: step.label,
           })
         }
         if (vm.failure) {
@@ -277,6 +280,8 @@ export function renderPanelRows(
           options?.maxWidth,
         ),
         tone: vm.tone,
+        // 子 run 行可点：进入该子 run 的 run 级节点视图（stepName 缺省）
+        runId: run.runId,
       })
       if (vm.failure) {
         rows.push({ text: truncate(`${indent}  ↳ ${vm.failure}`, options?.maxWidth), tone: "error" })
@@ -537,5 +542,160 @@ export function renderDetailRows(
   if (detail.failure !== undefined && detail.failure !== "") {
     rows.push({ text: truncate(`  ↳ ${detail.failure}`, maxWidth), tone: "error" })
   }
+  return rows
+}
+
+/* ------------------------------------------------------------------ *
+ * 节点详情视图（v0.8.9，v1 NodeDetailView 对位）
+ *
+ * 点击面板步骤行 / 子 run 行进入（plugin 路由整页接管）：三段式 =
+ * 状态头（label/状态/attempt 位预留）→ 元数据（model · 时长 · token）→
+ * 正文（prompt 预览 + result + agent 会话消息回放）。纯函数出行，
+ * JSX 层只做铺线 + 键位（Enter 开会话 / ←→ 切节点 / Esc 返回）。
+ * ------------------------------------------------------------------ */
+
+export interface NodeViewInput {
+  /** 板上 live 快照（状态头/时长优先用它；不在板上时回落 detail） */
+  run: RunProgressSnapshot | undefined
+  /** journal 详情（step 载荷：input/output/error/usage/model/sessionIDs） */
+  detail: RunDetail | undefined
+  /** 步骤名；缺省 = run 级视图（workflow 概况 + 步骤清单） */
+  step?: string
+  /** agent 会话回放（该步骤的子会话消息） */
+  replay?: { sessionID: string; messages: ReadonlyArray<{ type: string; text: string }> }
+  /** 行宽（折行用）；缺省不折 */
+  maxWidth?: number
+}
+
+/** 节点视图行模型（JSX 层铺线；tone/bold 语义与面板一致） */
+export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): PanelRow[] {
+  const { run, detail, step, replay, maxWidth } = input
+  const rows: PanelRow[] = []
+
+  const pushMeta = (parts: ReadonlyArray<string | undefined>) => {
+    const joined = parts.filter((p) => p !== undefined && p !== "").join(" · ")
+    if (joined !== "") rows.push({ text: joined, tone: "muted" })
+  }
+
+  if (step !== undefined) {
+    // ---- 步骤级节点 ----
+    const liveStep = run?.steps.find((s) => s.name === step)
+    const stepDetail = detail?.steps.find((s) => s.name === step)
+    const status = liveStep?.status ?? stepDetail?.status ?? "running"
+    const tone = statusTone(status)
+    rows.push({
+      text: `${stepGlyph(status)} ${step}  ${status}`,
+      tone,
+      bold: true,
+    })
+
+    // 元数据：model · 时长 · token（in/out）
+    const started = liveStep?.startedAt ?? stepDetail?.startedAt
+    const finished = liveStep?.completedAt ?? stepDetail?.completedAt
+    const usage = stepDetail?.usage
+    pushMeta([
+      stepDetail?.model,
+      started !== undefined ? formatDuration(Math.max(0, (finished ?? now) - started)) : undefined,
+      usage !== undefined
+        ? `${formatTokens(usageToTokens(usage))} tok (in ${formatTokens(usage.input)} / out ${formatTokens(usage.output)})`
+        : undefined,
+    ])
+
+    // 标识符：run · workflow · 会话数
+    const sessions = stepDetail?.sessionIDs
+    pushMeta([
+      `run ${detail?.runId ?? run?.runId ?? "-"}`,
+      detail !== undefined ? `${detail.workflow.id}@${detail.workflow.version}` : undefined,
+      sessions !== undefined ? `${sessions.length} session(s)` : undefined,
+    ])
+
+    // prompt 预览
+    if (stepDetail?.input !== undefined && stepDetail.input !== "") {
+      rows.push({ text: "", tone: "muted" })
+      for (const line of wrapPreview(`prompt: ${stepDetail.input}`, maxWidth, 6)) {
+        rows.push({ text: line, tone: "muted" })
+      }
+    }
+
+    // result 正文：error / output / running / empty 四态
+    rows.push({ text: "", tone: "muted" })
+    if (stepDetail?.error !== undefined && stepDetail.error !== "") {
+      for (const line of wrapPreview(`Error: ${stepDetail.error}`, maxWidth, 12)) {
+        rows.push({ text: line, tone: "error" })
+      }
+    } else if (stepDetail?.output !== undefined && stepDetail.output !== "") {
+      for (const line of wrapPreview(stepDetail.output, maxWidth, 24)) {
+        rows.push({ text: line })
+      }
+    } else if (status === "running" || started === undefined) {
+      rows.push({ text: "No result yet", tone: "warning" })
+    } else {
+      rows.push({ text: "No result returned", tone: "muted" })
+    }
+
+    // agent 会话回放
+    if (replay !== undefined && replay.messages.length > 0) {
+      rows.push({ text: "", tone: "muted" })
+      rows.push(...renderSessionRows({ ...replay, step }, maxWidth, 40))
+    }
+
+    rows.push({
+      text: sessions !== undefined && sessions.length > 0
+        ? "Enter Open Session · ←/→ 切换节点 · Esc 返回"
+        : "←/→ 切换节点 · Esc 返回",
+      tone: "muted",
+    })
+    return rows
+  }
+
+  // ---- run 级节点（点击子 run 行 / run 头行区域进入）----
+  const workflow = detail?.workflow ?? run?.workflow
+  const status = detail?.status ?? run?.status ?? "running"
+  const tone = statusTone(status)
+  const started = detail?.startedAt ?? run?.startedAt
+  const finished = detail?.completedAt ?? run?.completedAt
+  const stepRows = detail?.steps ?? []
+  const done = stepRows.filter((s) => s.status === "completed").length
+  rows.push({
+    text: `${RUN_GLYPHS[status] ?? "▶"} ${workflow ? `${workflow.id}@${workflow.version}` : "-"}  ${status}`,
+    tone,
+    bold: true,
+  })
+  pushMeta([
+    started !== undefined ? formatDuration(Math.max(0, (finished ?? now) - started)) : undefined,
+    stepRows.length > 0 ? `${done}/${stepRows.length} steps` : undefined,
+  ])
+  pushMeta([`run ${detail?.runId ?? run?.runId ?? "-"}`])
+
+  if (detail?.args !== undefined && detail.args !== "") {
+    rows.push({ text: "", tone: "muted" })
+    for (const line of wrapPreview(`args: ${detail.args}`, maxWidth, 6)) {
+      rows.push({ text: line, tone: "muted" })
+    }
+  }
+
+  rows.push({ text: "", tone: "muted" })
+  for (const s of stepRows) {
+    const sStarted = s.startedAt
+    const sFinished = s.completedAt
+    rows.push({
+      text: `  ${stepGlyph(s.status)} ${s.name ?? `step ${s.index}`}${
+        sStarted !== undefined ? `  ${formatDuration(Math.max(0, (sFinished ?? finished ?? now) - sStarted))}` : ""
+      }`,
+      tone: statusTone(s.status),
+    })
+  }
+  if (detail?.failure !== undefined && detail.failure !== "") {
+    rows.push({ text: `  ↳ ${detail.failure}`, tone: "error" })
+  }
+  if (stepRows.length === 0 && (detail === undefined || run === undefined)) {
+    rows.push({ text: "找不到该节点的数据（快照与 journal 均无记录）", tone: "muted" })
+  }
+
+  const anySession = stepRows.some((s) => (s.sessionIDs?.length ?? 0) > 0)
+  rows.push({
+    text: anySession ? "Enter Open Session · Esc 返回" : "Esc 返回",
+    tone: "muted",
+  })
   return rows
 }

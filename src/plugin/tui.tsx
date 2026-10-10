@@ -24,7 +24,7 @@
 
 import { Plugin } from "@opencode/plugin/tui"
 import type { ResolvedTheme } from "@opencode/theme/tui"
-import { createSignal } from "solid-js"
+import { createEffect, createMemo, createSignal } from "solid-js"
 
 import { CHECKPOINT_REQUESTED_EVENT, CheckpointRpc } from "./checkpoint-rpc.js"
 import {
@@ -34,11 +34,13 @@ import {
   parseRunSnapshot,
   parseRunSnapshotList,
   parseSessionReplay,
+  type SessionReplay,
 } from "./progress-rpc.js"
 import {
   renderDetailRows,
   renderDetailSection,
   renderHomeFooterRows,
+  renderNodeRows,
   renderPanelRows,
   renderPromptFooterRows,
   renderSessionRows,
@@ -258,16 +260,34 @@ function setupProgressPanel(ctx: TuiContext): () => void {
       return next
     })
   }
-  /** 可折叠头行：点击整行切换（v1 实测教训——handler 只挂标题行自身，
-   *  挂外层会因事件冒泡在节点导航后误折叠） */
-  const RowLine = (props: { key?: number; row: PanelRow }) =>
-    props.row.collapsible ? (
-      <box onMouseDown={() => toggleCollapse(props.row)}>
-        <RowText theme={ctx.theme} row={props.row} />
+  /** 可交互行：折叠头行点击切换；带 runId 的行（步骤/子 run）点击进节点详情 */
+  const RowLine = (props: { key?: number; row: PanelRow; sessionID?: string }) => {
+    const row = props.row
+    const interactive = row.collapsible === true || row.runId !== undefined
+    if (!interactive) return <RowText theme={ctx.theme} row={row} />
+    return (
+      <box
+        onMouseDown={() => {
+          if (row.collapsible === true) {
+            toggleCollapse(row)
+            return
+          }
+          if (row.runId === undefined) return
+          ctx.ui.router.navigate({
+            type: "plugin",
+            name: "node",
+            data: {
+              runId: row.runId,
+              ...(row.stepName !== undefined ? { step: row.stepName } : {}),
+              ...(props.sessionID !== undefined ? { returnSessionID: props.sessionID } : {}),
+            },
+          })
+        }}
+      >
+        <RowText theme={ctx.theme} row={row} />
       </box>
-    ) : (
-      <RowText theme={ctx.theme} row={props.row} />
     )
+  }
 
   // 面板 claim：宿主选中我们的内容名时才渲染；其余名字让位（返回空 fragment）
   const offSlot = ctx.ui.slot({
@@ -289,7 +309,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
                     { text: "(no runs yet — start one with workflow_start)", tone: "muted" },
                   ] as PanelRow[])
             ) as PanelRow[]
-            ).map((row, i) => <RowLine key={i} row={row} />)}
+            ).map((row, i) => <RowLine key={i} row={row} sessionID={input.sessionID} />)}
           </box>
         ) : (
           <></>
@@ -317,13 +337,13 @@ function setupProgressPanel(ctx: TuiContext): () => void {
   // sidebar.content 紧凑树（批次 B）：侧边栏常驻；空板整块不渲染
   const offSidebar = ctx.ui.slot({
     append: "sidebar.content",
-    render: () => {
+    render: (input) => {
       if (runs().length === 0) return <></>
       const rows = renderSidebarRows(runs(), Date.now(), { collapseOverride: collapseOverride() })
       return (
         <box flexDirection="column">
           {rows.map((row, i) => (
-            <RowLine key={i} row={row} />
+            <RowLine key={i} row={row} sessionID={input.sessionID} />
           ))}
         </box>
       )
@@ -373,11 +393,177 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     },
   })
 
+  /* ---------------------------------------------------------------- *
+   * 节点详情视图（v0.8.9，v1 NodeDetailView 对位）
+   *
+   * 点击面板/侧栏的步骤行（stepName）或子 run 行（runId）进入 plugin 路由；
+   * 整页三段式（状态头 / 元数据 / prompt+result+会话回放正文），行模型出自
+   * renderNodeRows 纯函数。键位：Enter 开 agent 子会话 · ←/→ 切兄弟节点 ·
+   * Esc 返回来源会话。数据：live 快照（头行状态/时长）+ detail RPC（载荷）
+   * + session RPC（子会话消息回放）——与面板同通道，无新增 RPC。
+   * ---------------------------------------------------------------- */
+  const NodeView = (props: { data?: Record<string, unknown> }) => {
+    const runId = () => (props.data?.runId as string | undefined) ?? undefined
+    const step = () => (props.data?.step as string | undefined) ?? undefined
+    const returnSessionID = () => (props.data?.returnSessionID as string | undefined) ?? undefined
+    const liveRun = () => runs().find((r) => r.runId === runId())
+    const [detail, setDetail] = createSignal<RunDetail | undefined>()
+    const [replay, setReplay] = createSignal<SessionReplay | undefined>()
+
+    // journal 详情：runId@status 去重（终态转换再拉一次收尾，与面板同策略）
+    createEffect(() => {
+      const id = runId()
+      if (id === undefined) return
+      const statusKey = liveRun()?.status ?? "-"
+      void ctx.client
+        .rpc(ProgressRpc)
+        .detail({ runId: id })
+        .then((output) => {
+          if (runId() !== id) return
+          setDetail(parseRunDetail(output))
+        })
+        .catch(() => {
+          if (runId() !== id) return
+          setDetail(undefined)
+        })
+      void statusKey
+    })
+
+    // agent 会话回放：随节点切换与状态转换重拉
+    createEffect(() => {
+      const id = runId()
+      const name = step()
+      if (id === undefined || name === undefined) {
+        setReplay(undefined)
+        return
+      }
+      void ctx.client
+        .rpc(ProgressRpc)
+        .session({ runId: id, step: name })
+        .then((output) => {
+          if (runId() !== id || step() !== name) return
+          setReplay(parseSessionReplay(output) ?? undefined)
+        })
+        .catch(() => {
+          if (runId() !== id || step() !== name) return
+          setReplay(undefined)
+        })
+    })
+
+    const rows = createMemo(() =>
+      renderNodeRows(
+        {
+          run: liveRun(),
+          detail: detail(),
+          step: step(),
+          replay: replay(),
+          maxWidth: 100,
+        },
+        Date.now(),
+      ),
+    )
+
+    /** 兄弟节点切换序列：live 快照步骤名（回落 journal detail），循环游标 */
+    const switchStep = (delta: number) => {
+      const id = runId()
+      if (id === undefined) return
+      const names = (
+        liveRun()?.steps.map((s) => s.name) ??
+        detail()?.steps.map((s) => s.name) ??
+        []
+      ).filter((n): n is string => n !== undefined)
+      if (names.length === 0) return
+      const current = step()
+      const idx = current !== undefined ? names.indexOf(current) : -1
+      const next = names[(idx + delta + names.length) % names.length]
+      if (next === undefined || next === current) return
+      ctx.ui.router.navigate({
+        type: "plugin",
+        name: "node",
+        data: {
+          runId: id,
+          step: next,
+          ...(returnSessionID() !== undefined ? { returnSessionID: returnSessionID() } : {}),
+        },
+      })
+    }
+
+    const openSession = () => {
+      const target = detail()?.steps.find((s) => s.name === step())?.sessionIDs?.[0]
+      if (target !== undefined) ctx.ui.router.navigate({ type: "session", sessionID: target })
+    }
+
+    const back = () => {
+      const sid = returnSessionID()
+      ctx.ui.router.navigate(sid !== undefined ? { type: "session", sessionID: sid } : { type: "home" })
+    }
+
+    // 键位层随组件生命周期存在（页面卸载即失效）；整页接管期间全局生效
+    ctx.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        { id: "agentic-workflow.node.back", title: "Back", bind: "escape", run: () => back() },
+        {
+          id: "agentic-workflow.node.prev",
+          title: "Previous node",
+          bind: "left",
+          run: () => switchStep(-1),
+        },
+        {
+          id: "agentic-workflow.node.next",
+          title: "Next node",
+          bind: "right",
+          run: () => switchStep(1),
+        },
+        {
+          id: "agentic-workflow.node.open",
+          title: "Open agent session",
+          bind: "enter",
+          run: () => openSession(),
+        },
+      ],
+      bindings: [
+        "agentic-workflow.node.back",
+        "agentic-workflow.node.prev",
+        "agentic-workflow.node.next",
+        "agentic-workflow.node.open",
+      ],
+    }))
+
+    return (
+      <box
+        position="absolute"
+        left={0}
+        top={0}
+        width="100%"
+        height="100%"
+        flexDirection="column"
+        backgroundColor={ctx.theme.background.base}
+        paddingTop={1}
+        paddingLeft={2}
+        paddingRight={2}
+      >
+        <scrollbox flexGrow={1} flexDirection="column">
+          {rows().map((row, i) => (
+            <RowText key={i} theme={ctx.theme} row={row} />
+          ))}
+        </scrollbox>
+      </box>
+    )
+  }
+
+  // plugin 路由注册：node 页（RowLine 点击导航至此；宿主缺 router 时降级不注册）
+  const offPage = ctx.ui.router?.register({
+    name: "node",
+    render: (input) => <NodeView data={input.data} />,
+  })
+
   return () => {
     offEvent()
     offSlot()
     offFooter()
     offSidebar()
     offHomeFooter()
+    offPage?.()
   }
 }
