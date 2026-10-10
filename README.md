@@ -476,7 +476,8 @@ pipeline 步的第几个会话，缺省最后一个；消息取 user/assistant �
 自动选择的那一个。
 
 数据链路：RunJournal 状态转换 → `run.progress` 事件总线 → ProgressBoard（容量 20，
-journalDir 配置时用历史 run 做种子）→ `agentic-workflow-progress` RPC。headless
+journalDir 配置时用**非终态**历史 run 做种子——只浮现上次被中断的，终态 run
+不占启动面板）→ `agentic-workflow-progress` RPC。headless
 （`opencode run`）下没有 TUI 监听，转发零成本；同一份事件流也会写进 traceDir
 （`events.jsonl`），可作为无头观测替代。
 

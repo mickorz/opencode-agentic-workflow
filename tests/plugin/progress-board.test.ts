@@ -83,20 +83,20 @@ test("bindProgressBoard: 注册 snapshot 方法 + 事件流入 + 种子装载", 
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-board-"))
   const store = new FileExecutionStore(baseDir)
 
-  // 历史两条（落盘顺序故意旧->新）
+  // 历史两条（落盘顺序故意旧->新）：run_old 已完成（终态，不播种）；
+  // run_new 被中断（不收口，卡 running——启动面板应只浮现它）
   await RunJournal.start(store, {
     workflow: { id: "demo", version: "1.0.0" },
     stepCount: 1,
     stepNames: ["only"],
     runId: "run_old",
   }).then((j) => j.complete())
-  const newer = await RunJournal.start(store, {
+  await RunJournal.start(store, {
     workflow: { id: "demo", version: "1.0.0" },
     stepCount: 1,
     stepNames: ["only"],
     runId: "run_new",
   })
-  await newer.complete()
 
   const registrations: Array<Record<string, (input: unknown) => Promise<unknown>>> = []
   // 先换全局 bus 再 bind：board 订阅 bind 时的全局 bus（与 trace.ts 同款时序）
@@ -127,11 +127,11 @@ test("bindProgressBoard: 注册 snapshot 方法 + 事件流入 + 种子装载", 
   assert.equal((reg as unknown as { id: string }).id, "agentic-workflow-progress")
   assert.ok(typeof reg.snapshot === "function")
 
-  // 种子来自 store，newest first
+  // 种子只含被中断的 run_new（终态 run_old 不再上启动面板）
   const seeded = (await reg.snapshot?.({})) as { runs: RunProgressSnapshot[] }
   assert.deepEqual(
     seeded.runs.map((r) => r.runId),
-    ["run_new", "run_old"],
+    ["run_new"],
   )
 
   // 事件流入（board 订阅的 bus）-> 板更新 -> snapshot 反映
@@ -141,27 +141,41 @@ test("bindProgressBoard: 注册 snapshot 方法 + 事件流入 + 种子装载", 
   assert.equal(after.runs[0]?.runId, "run_live")
   assert.deepEqual(
     after.runs.map((r) => r.runId),
-    ["run_live", "run_new", "run_old"],
+    ["run_live", "run_new"],
   )
 
   board?.dispose()
 })
 
-test("seedFromStore: newest-first 映射 + 容量截断", async () => {
+test("seedFromStore: 只播种非终态（被中断）run；newest-first + 容量截断", async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "agw-seed-"))
   const store = new FileExecutionStore(baseDir)
-  for (const runId of ["run_1", "run_2", "run_3"]) {
-    const journal = await RunJournal.start(store, {
+  const start = (runId: string) =>
+    RunJournal.start(store, {
       workflow: { id: "demo", version: "1.0.0" },
       stepCount: 1,
       runId,
     })
-    await journal.complete()
-  }
-  const seeded = await seedFromStore(store, 2)
-  // listRuns 返回顺序不定；seedFromStore 自行排序 + 截断
-  assert.equal(seeded.length, 2)
-  assert.ok(seeded.every((r) => r.status === "completed"))
+
+  await start("run_1").then((j) => j.complete()) // 终态：completed
+  await start("run_2") // 非终态：被中断（不收口，卡 running）
+  await start("run_3").then((j) => j.fail(new Error("x"))) // 终态：failed（可 resumeRunId，但不播种）
+  await start("run_4").then((j) => j.abort("stop")) // 终态：aborted
+  await start("run_5") // 非终态：最新的被中断
+
+  const seeded = await seedFromStore(store)
+  assert.deepEqual(
+    seeded.map((r) => r.runId),
+    ["run_5", "run_2"],
+  )
+  assert.ok(seeded.every((r) => r.status === "running"))
+
+  // 容量截断作用于过滤之后（newest first 取前 N）
+  const capped = await seedFromStore(store, 1)
+  assert.deepEqual(
+    capped.map((r) => r.runId),
+    ["run_5"],
+  )
 })
 
 test("bindProgressBoard: detail 方法（journal 单读；未知 run/坏入参 -> null）", async () => {

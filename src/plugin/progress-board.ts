@@ -173,7 +173,8 @@ export async function bindProgressBoard(deps: {
       }
     },
   })
-  // store 种子：面板打开时能立即看到近期历史 run（不只是本次会话的）
+  // store 种子（v0.8.4）：只播种非终态 run——上次被中断的才值得在启动时
+  // 浮现（可续跑）；终态 run 不再占版面（面板历史残留的治理）
   let seed: RunProgressSnapshot[] | undefined
   if (deps.store) {
     seed = await seedFromStore(deps.store, deps.options?.capacity ?? 20)
@@ -195,13 +196,20 @@ export async function bindProgressBoard(deps: {
   return board
 }
 
-/** store 里的近期 run -> 快照种子（newest first，容量截断） */
+/** store 里的近期 run -> 快照种子（newest first，容量截断）
+ *
+ * v0.8.4 起只播种**非终态** run（进程退出时卡在 running 的被中断 run）：
+ * 启动面板保持干净，只浮现「上次没跑完、值得处理」的；completed /
+ * failed / aborted 不再上启动面板（failed 仍可用 resumeRunId 续跑，
+ * 只是不占版面——见 recorder.reopen 的可续跑状态集）。
+ */
 export async function seedFromStore(
   store: ExecutionStore,
   capacity = 20,
 ): Promise<RunProgressSnapshot[]> {
   const runs = await store.listRuns()
   return runs
+    .filter((run) => run.status === "running")
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, capacity)
     .map(toProgressSnapshot)
