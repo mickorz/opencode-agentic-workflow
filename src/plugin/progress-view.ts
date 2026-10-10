@@ -782,6 +782,8 @@ export function renderOverviewHeaderRows(
   return [
     { text: title, bold: true },
     { text: truncate(chips.join(""), options?.maxWidth), tone: "muted" },
+    // 与正文树之间留一行呼吸感（空板无正文，不加）
+    { text: "" },
   ]
 }
 

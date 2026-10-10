@@ -601,13 +601,16 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     const rowRenderableIds = new Map<string, string>()
     let scrollBox: ScrollBoxRenderable | undefined
 
-    /** 总览正文 = 全展开的 run 树（默认每棵都展开；override 折叠仍生效） */
+    /** 总览正文 = 全展开的 run 树（默认每棵都展开；override 折叠仍生效）。
+     *  空板时正文为空——空态文案已由头部承担，不再重复渲染标题 */
     const bodyRows = createMemo(() =>
-      renderPanelRows(runs(), Date.now(), {
-        collapseOverride: collapseOverride(),
-        expandedRuns: Number.MAX_SAFE_INTEGER,
-        maxWidth: 120,
-      }),
+      runs().length === 0
+        ? []
+        : renderPanelRows(runs(), Date.now(), {
+            collapseOverride: collapseOverride(),
+            expandedRuns: Number.MAX_SAFE_INTEGER,
+            maxWidth: 120,
+          }),
     )
     const selectKeys = createMemo(() =>
       bodyRows()
