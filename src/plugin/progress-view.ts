@@ -727,8 +727,13 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
     const sStarted = s.startedAt
     const sFinished = s.completedAt
     rows.push({
-      text: `  ${stepGlyph(s.status)} ${s.name ?? `step ${s.index}`}${
-        sStarted !== undefined ? `  ${formatDuration(Math.max(0, (sFinished ?? finished ?? now) - sStarted))}` : ""
+      text: `  ${stepGlyph(s.status)} ${s.name ?? `step ${s.index}`}${attemptSuffix(s)}${
+        sStarted !== undefined
+          ? `  ${durationWithCap(
+              formatDuration(Math.max(0, (sFinished ?? finished ?? now) - sStarted)),
+              s.timeoutMs,
+            )}`
+          : ""
       }`,
       tone: statusTone(s.status),
     })
@@ -740,11 +745,9 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
     rows.push({ text: "找不到该节点的数据（快照与 journal 均无记录）", tone: "muted" })
   }
 
-  const anySession = stepRows.some((s) => (s.sessionIDs?.length ?? 0) > 0)
-  rows.push({
-    text: anySession ? "Enter Open Session · Esc 返回" : "Esc 返回",
-    tone: "muted",
-  })
+  // run 级视图：←/→ 从这里可直接进步骤节点（switchStep 无当前步骤时取首/尾）；
+  // Enter 仅在步骤级视图有意义（打开该步骤的 agent 会话）
+  rows.push({ text: "←/→ 进步骤节点 · Esc 返回", tone: "muted" })
   return rows
 }
 

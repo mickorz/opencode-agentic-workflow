@@ -690,8 +690,22 @@ test("renderNodeRows: run 级节点——概况 + 步骤清单 + args", () => {
   assert.ok(rows.some((r) => r.text === 'args: {"topic":"t"}' && r.tone === "muted"))
   assert.ok(rows.some((r) => r.text === "  ✓ gather  12.0s"))
   assert.ok(rows.some((r) => r.text === "  ✗ check  3.2s" && r.tone === "error"))
-  // 步骤带会话 → 提示 Enter
-  assert.equal(rows[rows.length - 1]?.text, "Enter Open Session · Esc 返回")
+  // run 级提示：←/→ 可进步骤节点（Enter 属于步骤级视图）
+  assert.equal(rows[rows.length - 1]?.text, "←/→ 进步骤节点 · Esc 返回")
+})
+
+test("v0.10.2 run 级节点步骤清单：带重试进度与超时上限后缀", () => {
+  const detail = detailFixture()
+  detail.steps[0] = {
+    ...detail.steps[0]!,
+    attempt: 2,
+    attemptsMax: 3,
+    timeoutMs: 60_000,
+  }
+  const rows = renderNodeRows({ detail }, 20_000)
+  assert.ok(rows.some((r) => r.text === "  ✓ gather (2/3)  12.0s/1m"))
+  // 无配置的步骤不渲染后缀
+  assert.ok(rows.some((r) => r.text === "  ✗ check  3.2s"))
 })
 
 test("renderNodeRows: 快照与 journal 均无记录 -> 找不到数据提示", () => {
