@@ -1,6 +1,6 @@
 {
   "name": "@mickorz/opencode-agentic-workflow",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Durable Agentic Workflow Runtime for OpenCode V2: journal & resume, version registry, tracing, token/cost metrics, git worktree isolation",
   "type": "module",
   "license": "MIT",
