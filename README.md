@@ -448,6 +448,12 @@ v1（opencode-dynamicworkflows）TUI 显示功能对齐第一、二批（对比�
 - **信息密度**：run 头行显示 `N running` 与 token 合计；列表步骤行直接
   带 `· 1.5k tok · 模型` 后缀（快照事件透传 usage/model，不用等 detail
   区拉取）；detail 头行同样带 token 合计
+- **重试/超时可观测（v0.10.0）**：配置了 `retries` 的 agent 步骤行与
+  节点详情状态头显示重试进度 `(2/3)`（成功 = 第几次尝试，失败 = 尝试
+  到第几次耗尽）；配置了 `timeoutMs` 的步骤时长带单次尝试上限
+  （`10s/1m` = 已耗时/上限）。数据链路：`agent()` 重试环回填
+  `attempt`/`attemptsMax` → journal 步骤记录 + 快照事件 → 面板/Inspector；
+  旧 journal 无这些字段时自动省略（向后兼容）
 - **prompt.footer 状态条**：有 run 在跑时，输入框下方常驻一行
   `◐ flow@ver done/total · N running`——打字时也看得见进度，无需开面板
 - **sidebar 紧凑树**：侧边栏常驻近期 run 一览（窄宽截断 + 行数预算，

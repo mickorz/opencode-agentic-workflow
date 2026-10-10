@@ -48,6 +48,9 @@ interface FakeStep {
   input?: unknown
   output?: unknown
   error?: unknown
+  /** v0.10.0：appendStep meta（timeoutMs/attemptsMax）与收口 attempt */
+  meta?: { timeoutMs?: number; attemptsMax?: number }
+  attempt?: number
 }
 
 async function runV1Script(
@@ -74,16 +77,22 @@ async function runV1Script(
 
   const steps: FakeStep[] = []
   const journal = {
-    async appendStep(name: string | undefined, input?: unknown) {
+    async appendStep(
+      name: string | undefined,
+      input?: unknown,
+      meta?: { timeoutMs?: number; attemptsMax?: number },
+    ) {
       const index = steps.length
-      steps.push({ index, name, input })
+      steps.push({ index, name, input, meta })
       return index
     },
-    async stepCompleted(index: number, output?: unknown) {
+    async stepCompleted(index: number, output?: unknown, attempt?: number) {
       steps[index]!.output = output
+      if (attempt !== undefined) steps[index]!.attempt = attempt
     },
-    async stepFailed(index: number, error: unknown) {
+    async stepFailed(index: number, error: unknown, attempt?: number) {
       steps[index]!.error = error
+      if (attempt !== undefined) steps[index]!.attempt = attempt
     },
   } as unknown as RunJournal
 
@@ -724,4 +733,41 @@ return { bad, rescued }
   }
   const { result } = await runV1Script(source, { executor: timeoutExecutor })
   assert.deepEqual(result, { bad: null, rescued: "rescued-value" })
+})
+
+test("执行：v0.10.0 agent 重试/超时元数据进 journal（attempt 收口 + 耗尽语义）", async () => {
+  const source = `export const meta = { name: 'attempt_flow' }
+const ok = await agent('重试后成功', { retries: 2, timeoutMs: 60000 })
+const dead = await fallback([
+  () => agent('必失败', { retries: 1 }),
+  () => 'rescued',
+])
+return { ok, dead }
+`
+  let calls = 0
+  const flaky: AgentExecutor = {
+    async execute(task) {
+      calls += 1
+      if (task.prompt.includes("重试后成功") && calls <= 1) {
+        throw new Error("boom #1")
+      }
+      if (task.prompt.includes("必失败")) throw new Error("always fails")
+      return { output: "ok" }
+    },
+  }
+  const { result, steps } = await runV1Script(source, { executor: flaky })
+  // fallback 成功吸收可恢复失败（v1 语义），run 正常完成
+  assert.deepEqual(result, { ok: "ok", dead: "rescued" })
+
+  // 成功步：meta 记录 timeoutMs/attemptsMax，attempt = 2（第二次成功）
+  const okStep = steps.find((s) => s.error === undefined && s.name === "agent-1")
+  assert.notEqual(okStep, undefined)
+  assert.deepEqual(okStep?.meta, { timeoutMs: 60000, attemptsMax: 3 })
+  assert.equal(okStep?.attempt, 2)
+
+  // 失败步：attempt = attemptsMax（重试耗尽；fallback 吸收不抹 journal 记录）
+  const deadStep = steps.find((s) => s.error !== undefined)
+  assert.notEqual(deadStep, undefined)
+  assert.equal(deadStep?.attempt, 2)
+  assert.deepEqual(deadStep?.meta, { attemptsMax: 2 })
 })

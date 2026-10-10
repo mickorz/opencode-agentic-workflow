@@ -86,6 +86,11 @@ export interface StepViewModel {
   tokens?: string
   /** 模型名（步骤内最后一次 agent 调用） */
   model?: string
+  /** 成功/耗尽尝试号（v0.10.0；attemptsMax > 1 时展示 `(2/3)`） */
+  attempt?: number
+  attemptsMax?: number
+  /** 单次尝试超时上限 ms（v0.10.0；时长展示 `10s/1m` 的分母） */
+  timeoutMs?: number
 }
 
 export interface RunViewModel {
@@ -130,6 +135,9 @@ export function toRunViewModel(run: RunProgressSnapshot, now: number = Date.now(
         : {}),
       ...(step.usage !== undefined ? { tokens: formatTokens(usageToTokens(step.usage)) } : {}),
       ...(step.model !== undefined ? { model: step.model } : {}),
+      ...(step.attempt !== undefined ? { attempt: step.attempt } : {}),
+      ...(step.attemptsMax !== undefined ? { attemptsMax: step.attemptsMax } : {}),
+      ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
     }
   })
   return {
@@ -178,6 +186,30 @@ function stepMetaSuffix(step: StepViewModel): string {
   if (step.tokens !== undefined) parts.push(`${step.tokens} tok`)
   if (step.model !== undefined) parts.push(step.model)
   return parts.length > 0 ? `  · ${parts.join(" · ")}` : ""
+}
+
+/** v0.10.0 重试进度 `(2/3)`：attemptsMax ≤ 1（未配置重试）时省略 */
+function attemptSuffix(step: { attempt?: number; attemptsMax?: number }): string {
+  if (step.attemptsMax === undefined || step.attemptsMax <= 1) return ""
+  return ` (${step.attempt ?? 1}/${step.attemptsMax})`
+}
+
+/** v0.10.0 超时上限紧凑人读（整值配置 30s / 1m / 5m / 1h；非整值回落 formatDuration） */
+function formatTimeoutCap(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return formatDuration(ms)
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  if (seconds % 60 === 0 && seconds < 3600) return `${seconds / 60}m`
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`
+  return formatDuration(ms)
+}
+
+/** v0.10.0 时长带超时上限 `10s/1m`（elapsed/cap）；无上限时纯时长 */
+function durationWithCap(duration: string | undefined, timeoutMs: number | undefined): string {
+  if (duration === undefined) return ""
+  return timeoutMs !== undefined
+    ? `${duration}/${formatTimeoutCap(timeoutMs)}`
+    : duration
 }
 
 /**
@@ -255,9 +287,14 @@ export function renderPanelRows(
               continue
             }
           }
-          const duration = step.duration ? `  ${step.duration}` : ""
+          const duration = step.duration
+            ? `  ${durationWithCap(step.duration, step.timeoutMs)}`
+            : ""
           rows.push({
-            text: truncate(`  ${step.glyph} ${step.label}${duration}${stepMetaSuffix(step)}`, options?.maxWidth),
+            text: truncate(
+              `  ${step.glyph} ${step.label}${attemptSuffix(step)}${duration}${stepMetaSuffix(step)}`,
+              options?.maxWidth,
+            ),
             tone: step.tone,
             runId: run.runId,
             stepName: step.label,
@@ -583,19 +620,30 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
     const stepDetail = detail?.steps.find((s) => s.name === step)
     const status = liveStep?.status ?? stepDetail?.status ?? "running"
     const tone = statusTone(status)
+    // v0.10.0 重试/超时元数据（live 快照与 journal 详情谁在用谁；两路同源不冲突）
+    const attemptMeta = {
+      attempt: stepDetail?.attempt ?? liveStep?.attempt,
+      attemptsMax: stepDetail?.attemptsMax ?? liveStep?.attemptsMax,
+      timeoutMs: stepDetail?.timeoutMs ?? liveStep?.timeoutMs,
+    }
     rows.push({
-      text: `${stepGlyph(status)} ${step}  ${status}`,
+      text: `${stepGlyph(status)} ${step}  ${status}${attemptSuffix(attemptMeta)}`,
       tone,
       bold: true,
     })
 
-    // 元数据：model · 时长 · token（in/out）
+    // 元数据：model · 时长（带上限 10s/1m）· token（in/out）
     const started = liveStep?.startedAt ?? stepDetail?.startedAt
     const finished = liveStep?.completedAt ?? stepDetail?.completedAt
     const usage = stepDetail?.usage
     pushMeta([
       stepDetail?.model,
-      started !== undefined ? formatDuration(Math.max(0, (finished ?? now) - started)) : undefined,
+      started !== undefined
+        ? durationWithCap(
+            formatDuration(Math.max(0, (finished ?? now) - started)),
+            attemptMeta.timeoutMs,
+          )
+        : undefined,
       usage !== undefined
         ? `${formatTokens(usageToTokens(usage))} tok (in ${formatTokens(usage.input)} / out ${formatTokens(usage.output)})`
         : undefined,

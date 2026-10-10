@@ -419,3 +419,90 @@ test("P2-8b reopen 重订：failed run reopen 后元数据重新聚合", async (
     setEventBus(createEventBus())
   }
 })
+
+test("v0.10.0 重试/超时元数据：appendStep meta + attempt 收口 + 双投影透传", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    // legacy 叶子步路径：appendStep 带 meta，stepCompleted/stepFailed 带 attempt
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "legacy-demo", version: "1.0.0" },
+      stepCount: 0,
+      runId: "run_attempt_meta",
+    })
+    const idx = await journal.appendStep("draft", "写一份草稿", {
+      timeoutMs: 60_000,
+      attemptsMax: 3,
+    })
+    await journal.stepCompleted(idx, "done", 2)
+    // 失败路径：attempt = 耗尽次数
+    const idx2 = await journal.appendStep("gate", "审批", { attemptsMax: 3 })
+    await journal.stepFailed(idx2, new Error("exhausted"), 3)
+    await journal.complete()
+
+    const loaded = await store.getRun("run_attempt_meta")
+    assert.equal(loaded?.steps[0]?.timeoutMs, 60_000)
+    assert.equal(loaded?.steps[0]?.attemptsMax, 3)
+    assert.equal(loaded?.steps[0]?.attempt, 2)
+    assert.equal(loaded?.steps[1]?.attempt, 3)
+
+    const snapshot = toProgressSnapshot(journal.run)
+    assert.equal(snapshot.steps[0]?.attempt, 2)
+    assert.equal(snapshot.steps[0]?.attemptsMax, 3)
+    assert.equal(snapshot.steps[0]?.timeoutMs, 60_000)
+
+    const detail = toRunDetail(journal.run)
+    assert.equal(detail.steps[0]?.attempt, 2)
+    assert.equal(detail.steps[0]?.attemptsMax, 3)
+    assert.equal(detail.steps[0]?.timeoutMs, 60_000)
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("v0.10.0 事件聚合：agent.completed 的 attempt/attemptsMax 落到 currentStep（内置步同样生效）", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "builtin-demo", version: "1.0.0" },
+      stepCount: 1,
+      stepNames: ["analyze"],
+      runId: "run_attempt_event",
+    })
+    await journal.stepStarted(0)
+    emitEvent({
+      type: "agent.completed", durationMs: 9, outputLength: 9, runId: "run_attempt_event",
+      attempt: 2, attemptsMax: 3,
+    })
+    await journal.stepCompleted(0, "ok")
+    assert.equal(journal.run.steps[0]?.attempt, 2)
+    assert.equal(journal.run.steps[0]?.attemptsMax, 3)
+  } finally {
+    setEventBus(createEventBus())
+  }
+})
+
+test("v0.10.0 旧 journal 兼容：无新字段的步骤记录读出为 undefined（展示层省略）", async () => {
+  const bus = createEventBus()
+  setEventBus(bus)
+  try {
+    const journal = await RunJournal.start(store, {
+      workflow: { id: "old-journal", version: "1.0.0" },
+      stepCount: 1,
+      stepNames: ["plain"],
+      runId: "run_attempt_old",
+    })
+    await journal.stepStarted(0)
+    await journal.stepCompleted(0, "ok")
+    const snapshot = toProgressSnapshot(journal.run)
+    const detail = toRunDetail(journal.run)
+    for (const step of [...snapshot.steps, ...detail.steps]) {
+      assert.equal(step.attempt, undefined)
+      assert.equal(step.attemptsMax, undefined)
+      assert.equal("timeoutMs" in step, false)
+    }
+  } finally {
+    setEventBus(createEventBus())
+  }
+})

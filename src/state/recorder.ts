@@ -64,6 +64,9 @@ export function toProgressSnapshot(run: WorkflowRun): RunProgressSnapshot {
       ...(step.completedAt !== undefined ? { completedAt: step.completedAt } : {}),
       ...(step.usage !== undefined ? { usage: step.usage } : {}),
       ...(step.model !== undefined ? { model: step.model } : {}),
+      ...(step.attempt !== undefined ? { attempt: step.attempt } : {}),
+      ...(step.attemptsMax !== undefined ? { attemptsMax: step.attemptsMax } : {}),
+      ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
     })),
   }
 }
@@ -95,6 +98,12 @@ export interface RunStepDetail {
   model?: string
   /** 步骤内各 agent 调用的宿主会话 ID（Open Session 回放；面板据此拉取对话） */
   sessionIDs?: string[]
+  /** 成功/耗尽尝试号（1 起；v0.10.0 Inspector `(2/3)` 分子） */
+  attempt?: number
+  /** 尝试上限（v0.10.0 `(2/3)` 分母；attemptsMax = 1 时展示省略） */
+  attemptsMax?: number
+  /** 单次尝试超时上限 ms（v0.10.0 时长 `10s/1m` 分母） */
+  timeoutMs?: number
 }
 
 /** run 详情（P2-8b 节点详情 RPC 载荷：journal 单读，含预览化的步骤载荷） */
@@ -155,6 +164,9 @@ export function toRunDetail(run: WorkflowRun): RunDetail {
       ...(step.usage !== undefined ? { usage: step.usage } : {}),
       ...(step.model !== undefined ? { model: step.model } : {}),
       ...(step.sessionIDs !== undefined && step.sessionIDs.length > 0 ? { sessionIDs: step.sessionIDs } : {}),
+      ...(step.attempt !== undefined ? { attempt: step.attempt } : {}),
+      ...(step.attemptsMax !== undefined ? { attemptsMax: step.attemptsMax } : {}),
+      ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
     })),
   }
 }
@@ -191,6 +203,10 @@ export class RunJournal {
       if (event.sessionID) {
         step.sessionIDs = [...(step.sessionIDs ?? []), event.sessionID]
       }
+      // v0.10.0 重试可观测：attempt 进步骤记录（内置 runSteps 步同样生效；
+      // legacy 叶子步另由 stepCompleted 显式收口，两路同值不冲突）
+      if (event.attempt !== undefined) step.attempt = event.attempt
+      if (event.attemptsMax !== undefined) step.attemptsMax = event.attemptsMax
     })
   }
 
@@ -236,9 +252,14 @@ export class RunJournal {
    * v0.8.0 legacy 脚本适配：动态追加步骤并直接置 running。
    * v1 脚本无静态步骤序（stepNames 缺省 → 预分配 0 步），叶子调用
    * （agent/checkpoint/subflow）在发生时经此追加——与 v1 树可见节点同粒度。
+   * meta（v0.10.0 重试/超时可观测）：timeoutMs / attemptsMax 进步骤记录。
    * 返回新步骤下标（调用方随后 stepCompleted/stepFailed 收口）。
    */
-  async appendStep(name: string | undefined, input?: unknown): Promise<number> {
+  async appendStep(
+    name: string | undefined,
+    input?: unknown,
+    meta?: { timeoutMs?: number; attemptsMax?: number },
+  ): Promise<number> {
     this.assertOpen()
     const index = this.run.steps.length
     this.run.steps.push({
@@ -246,6 +267,8 @@ export class RunJournal {
       ...(name !== undefined ? { name } : {}),
       status: "running",
       input,
+      ...(meta?.timeoutMs !== undefined ? { timeoutMs: meta.timeoutMs } : {}),
+      ...(meta?.attemptsMax !== undefined ? { attemptsMax: meta.attemptsMax } : {}),
       startedAt: Date.now(),
     })
     this.run.currentStep = index
@@ -265,21 +288,24 @@ export class RunJournal {
     this.emitProgress()
   }
 
-  async stepCompleted(index: number, output?: unknown): Promise<void> {
+  /** attempt（v0.10.0）：成功 = 第几次尝试；失败 = 尝试到第几次耗尽 */
+  async stepCompleted(index: number, output?: unknown, attempt?: number): Promise<void> {
     this.assertOpen()
     const step = this.step(index)
     step.status = "completed"
     step.output = output
+    if (attempt !== undefined) step.attempt = attempt
     step.completedAt = Date.now()
     await this.store.saveRun(this.run)
     this.emitProgress()
   }
 
-  async stepFailed(index: number, error: unknown): Promise<void> {
+  async stepFailed(index: number, error: unknown, attempt?: number): Promise<void> {
     this.assertOpen()
     const step = this.step(index)
     step.status = "failed"
     step.error = toErrorRecord(error)
+    if (attempt !== undefined) step.attempt = attempt
     step.completedAt = Date.now()
     await this.store.saveRun(this.run)
     this.emitProgress()

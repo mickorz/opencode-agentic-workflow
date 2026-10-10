@@ -769,3 +769,73 @@ test("renderPanelRows: expandedRuns 全展开——旧 run 步骤树也可见（
   assert.ok(secondHeader !== undefined)
   assert.equal(rowSelectionKey(rows.find((r) => r.runId === "run_2" && r.stepName === "gather")!), "run_2|step:gather")
 })
+
+test("v0.10.0 面板步骤行：重试进度 (2/3) + 时长带超时上限 10s/1m", () => {
+  const run = snapshot({
+    steps: [
+      {
+        index: 0,
+        name: "draft",
+        status: "completed",
+        startedAt: 4_000,
+        completedAt: 10_000,
+        attempt: 2,
+        attemptsMax: 3,
+        timeoutMs: 60_000,
+      },
+    ],
+  })
+  const rows = renderPanelRows([run], NOW)
+  const stepRow = rows.find((r) => r.text.includes("draft"))
+  assert.notEqual(stepRow, undefined)
+  // `✓ draft (2/3)  6.0s/1m`（elapsed 6s / cap 1m）
+  assert.match(stepRow!.text, /✓ draft \(2\/3\)  6\.0s\/1m/)
+})
+
+test("v0.10.0 面板步骤行：无重试配置（attemptsMax=1）省略 (1/1)；无 timeoutMs 纯时长", () => {
+  const run = snapshot({
+    steps: [
+      { index: 0, name: "draft", status: "completed", startedAt: 4_000, completedAt: 6_000 },
+    ],
+  })
+  const rows = renderPanelRows([run], NOW)
+  const stepRow = rows.find((r) => r.text.includes("draft"))
+  assert.match(stepRow!.text, /✓ draft  2\.0s$/)
+})
+
+test("v0.10.0 节点视图：状态头带 (2/3)，元数据时长带上限", () => {
+  const detail = detailFixture()
+  detail.steps[0] = {
+    ...detail.steps[0]!,
+    attempt: 2,
+    attemptsMax: 3,
+    timeoutMs: 60_000,
+  }
+  const rows = renderNodeRows({ detail, step: "gather" }, 20_000)
+  assert.equal(rows[0]?.text, "✓ gather  completed (2/3)")
+  // 元数据：时长 12s（1k→13k）带上限 1m
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s/1m · 1.2k tok (in 700 / out 500)")
+})
+
+test("v0.10.0 节点视图：失败步 (3/3) 耗尽语义；live 快照与 detail 双源取值", () => {
+  const detail = detailFixture()
+  detail.steps[1] = {
+    ...detail.steps[1]!,
+    attempt: 3,
+    attemptsMax: 3,
+    timeoutMs: 30_000,
+  }
+  const rows = renderNodeRows(
+    { detail, run: undefined, step: "check" },
+    20_000,
+  )
+  assert.equal(rows[0]?.text, "✗ check  failed (3/3)")
+  // 3.2s（13k→16.2k）带上限 30s
+  assert.equal(rows[1]?.text, "3.2s/30s")
+})
+
+test("v0.10.0 节点视图：旧 journal（无新字段）不渲染 attempt/上限（向后兼容）", () => {
+  const rows = renderNodeRows({ detail: detailFixture(), step: "gather" }, 20_000)
+  assert.equal(rows[0]?.text, "✓ gather  completed")
+  assert.equal(rows[1]?.text, "glm-5.3-flash · 12.0s · 1.2k tok (in 700 / out 500)")
+})

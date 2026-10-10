@@ -110,14 +110,20 @@ async function withTimeout<T>(run: () => Promise<T>, timeoutMs?: number): Promis
   }
 }
 
-async function withRetries<T>(run: () => Promise<T>, retries: number, delayMs: number): Promise<T> {
+/** 重试环（v0.10.0）：返回成功值与其尝试号（1 起）——attempt 供 journal/面板展示 */
+async function withRetries<T>(
+  run: () => Promise<T>,
+  retries: number,
+  delayMs: number,
+): Promise<{ value: T; attempt: number }> {
   let lastError: unknown
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0 && delayMs > 0) {
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    if (attempt > 1 && delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs))
     }
     try {
-      return await run()
+      const value = await run()
+      return { value, attempt }
     } catch (error) {
       lastError = error
     }
@@ -153,8 +159,9 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
 
   emitEvent({ type: "agent.started", promptPreview: preview(prompt), ...(runId ? { runId } : {}) })
   const startedAt = Date.now()
+  const attemptsMax = retries + 1
   try {
-    const result = await withRetries(
+    const { value: result, attempt } = await withRetries(
       () =>
         withTimeout(async () => {
           const executed = await requireExecutor().execute(task)
@@ -174,6 +181,7 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
       retries,
       retryDelayMs,
     )
+    const enriched: AgentResult = { ...result, attempt, attemptsMax }
     emitEvent({
       type: "agent.completed",
       durationMs: Date.now() - startedAt,
@@ -183,8 +191,11 @@ export async function agent(prompt: string, options: AgentCallOptions = {}): Pro
       model: result.model,
       ...(result.sessionID !== undefined ? { sessionID: result.sessionID } : {}),
       ...(runId ? { runId } : {}),
+      // v0.10.0 重试可观测：面板/Inspector 的 `(2/3)` 数据源
+      attempt,
+      attemptsMax,
     })
-    return result
+    return enriched
   } catch (error) {
     emitEvent({
       type: "agent.failed",

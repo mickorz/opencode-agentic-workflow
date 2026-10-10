@@ -44,6 +44,10 @@ export type WorkflowEvent = WorkflowEventBase &
         runId?: string
         /** 执行调用的宿主会话 ID（Open Session 回放；journal 侧聚合到步骤） */
         sessionID?: string
+        /** 成功尝试号（1 起；v0.10.0 重试可观测） */
+        attempt?: number
+        /** 尝试上限（retries + 1；v0.10.0） */
+        attemptsMax?: number
       }
     | {
         type: "agent.failed"
@@ -109,6 +113,12 @@ export interface RunProgressSnapshot {
     usage?: { input: number; output: number; reasoning: number }
     /** 步骤内最后一次 agent 调用的模型（v0.7.0，同上） */
     model?: string
+    /** 成功/耗尽尝试号（1 起；v0.10.0 面板 `(2/3)` 数据源） */
+    attempt?: number
+    /** 尝试上限（agent 调用 retries + 1；v0.10.0） */
+    attemptsMax?: number
+    /** 该步骤 agent 调用的单次尝试超时上限（v0.10.0 时长 `10s/1m` 数据源） */
+    timeoutMs?: number
   }>
 }
 

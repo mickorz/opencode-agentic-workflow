@@ -58,6 +58,15 @@ export interface WorkflowIdentity {
   model?: string
   /** 步骤内各 agent 调用的宿主会话 ID（Open Session 回放；pipeline 步多个） */
   sessionIDs?: string[]
+  /**
+   * 成功/耗尽尝试号（1 起；v0.10.0 重试可观测，legacy agent 步填充）：
+   * completed = 第几次成功，failed = 尝试到第几次耗尽。
+   */
+  attempt?: number
+  /** 尝试上限（agent 调用 retries + 1；展示 `(2/3)` 的分母） */
+  attemptsMax?: number
+  /** 该步骤 agent 调用的单次尝试超时上限（展示 `10s/1m` 的分母） */
+  timeoutMs?: number
   startedAt?: number
   completedAt?: number
 }

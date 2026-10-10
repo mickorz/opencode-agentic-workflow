@@ -59,6 +59,13 @@ export interface AgentResult {
    * 填充（如 V2 子会话 ses_*）；回放侧凭它拉取完整对话。
    */
   sessionID?: string
+  /**
+   * 成功完成的尝试号（1 起；v0.10.0 重试可观测）：retries=2 且第二次
+   * 成功时 = 2。由 agent() 原语的重试环填充，executor 不负责。
+   */
+  attempt?: number
+  /** 尝试上限（retries + 1；v0.10.0 与 attempt 配对展示 `(2/3)`） */
+  attemptsMax?: number
 }
 
 export interface AgentExecutor {

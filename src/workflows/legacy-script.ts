@@ -379,7 +379,7 @@ export function buildLegacyDefinition(
         // v1 per-call worktree 隔离：独立 worktree 中执行，结束自动拆除；
         // 仓库不可用（非 git 等）降级共享目录并响亮说明（v1 同款语义）
         const useWorktree = opts?.isolation === "worktree"
-        const inner = async (): Promise<unknown> => {
+        const inner = async (): Promise<{ attempt?: number; value: unknown }> => {
           let handle: Awaited<ReturnType<GitWorktreeProvider["create"]>> | undefined
           if (useWorktree) {
             try {
@@ -407,17 +407,41 @@ export function buildLegacyDefinition(
               ...passThrough,
               ...(handle !== undefined ? { cwd: handle.root } : {}),
             })
-            return opts?.schema !== undefined ? result.structured : result.output
+            return {
+              // v0.10.0：成功尝试号（agent() 重试环回填；retries=0 时为 1）
+              attempt: result.attempt,
+              value: opts?.schema !== undefined ? result.structured : result.output,
+            }
           } finally {
             if (handle !== undefined) {
               await handle.dispose({ force: true }).catch(() => undefined)
             }
           }
         }
+        // v0.10.0 重试/超时上限进步骤记录（面板 `(2/3)` 与时长 `10s/1m` 数据源）；
+        // 失败即重试耗尽 → attempt = attemptsMax（withRetries 全试完才上抛）
+        const attemptsMax = (passThrough.retries ?? 0) + 1
+        const runJournaled = async (): Promise<unknown> => {
+          if (journal === undefined) {
+            return (await inner()).value
+          }
+          const index = await journal.appendStep(label, previewText(prompt), {
+            ...(passThrough.timeoutMs !== undefined ? { timeoutMs: passThrough.timeoutMs } : {}),
+            attemptsMax,
+          })
+          try {
+            const { attempt, value } = await inner()
+            await journal.stepCompleted(index, previewText(value), attempt)
+            return value
+          } catch (error) {
+            await journal.stepFailed(index, error, attemptsMax)
+            throw error
+          }
+        }
         // v1 语义：可恢复失败（超时/schema 耗尽重试）记 failed 后塌缩 null 继续，
         // 登记阶段失败闸门（下一 phase() 边界或 run 终检裁决）；结构性错误上抛
         try {
-          return await journaledStep(journal, label, prompt, inner)
+          return await runJournaled()
         } catch (error) {
           if (isRecoverableFailure(error)) {
             const message = error instanceof Error ? error.message : String(error)
