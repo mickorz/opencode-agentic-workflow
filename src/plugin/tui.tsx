@@ -24,6 +24,7 @@
 
 import { Plugin } from "@opencode/plugin/tui"
 import type { ResolvedTheme } from "@opencode/theme/tui"
+import type { Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { createEffect, createMemo, createSignal } from "solid-js"
 
 import { CHECKPOINT_REQUESTED_EVENT, CheckpointRpc } from "./checkpoint-rpc.js"
@@ -41,11 +42,14 @@ import {
   renderDetailSection,
   renderHomeFooterRows,
   renderNodeRows,
+  renderOverviewHeaderRows,
   renderPanelRows,
   renderPromptFooterRows,
   renderSessionRows,
   renderSessionSection,
   renderSidebarRows,
+  moveSelection,
+  rowSelectionKey,
   type DetailSection,
   type PanelRow,
   type PanelTone,
@@ -368,7 +372,8 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     },
   })
 
-  // /workflow 命令 + 命令面板入口
+  // /workflow 命令 + 命令面板入口（v0.8.10 批次 C：/workflow 进全屏总览，
+  // v1 肌肉记忆对位；侧栏面板另留 palette 命令 + run 启动自动开）
   // keymap.layer 必须在组件/slot 渲染上下文内调用（宿主 2.0.22 在 setup 顶层调用会抛
   // "Keymap.Provider is missing"）；官方 session.panel 示例用 append:"app" 空渲染挂载。
   ctx.ui.slot({
@@ -378,11 +383,27 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         mode: "global",
         commands: [
           {
-            id: "agentic-workflow.panel",
-            title: "Workflow progress",
+            id: "agentic-workflow.overview.command",
+            title: "Workflow overview",
             group: "Agentic Workflow",
             palette: true,
             slash: { name: "workflow" },
+            run: () => {
+              // 回程键：当前在会话里就记下，Esc 能回来；主页/别处进入则回 home
+              const cur = ctx.ui.router.current()
+              const sid = cur.type === "session" ? cur.sessionID : undefined
+              ctx.ui.router.navigate({
+                type: "plugin",
+                name: "overview",
+                data: sid !== undefined ? { returnSessionID: sid } : undefined,
+              })
+            },
+          },
+          {
+            id: "agentic-workflow.panel",
+            title: "Workflow progress panel",
+            group: "Agentic Workflow",
+            palette: true,
             run: () => {
               ctx.ui.panel.open(PANEL_NAME)
             },
@@ -406,6 +427,8 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     const runId = () => (props.data?.runId as string | undefined) ?? undefined
     const step = () => (props.data?.step as string | undefined) ?? undefined
     const returnSessionID = () => (props.data?.returnSessionID as string | undefined) ?? undefined
+    /** 进入来源（"overview" = 从全屏总览进，Esc 回总览而非会话） */
+    const from = () => (props.data?.from as string | undefined) ?? undefined
     const liveRun = () => runs().find((r) => r.runId === runId())
     const [detail, setDetail] = createSignal<RunDetail | undefined>()
     const [replay, setReplay] = createSignal<SessionReplay | undefined>()
@@ -483,6 +506,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         data: {
           runId: id,
           step: next,
+          ...(from() !== undefined ? { from: from() } : {}),
           ...(returnSessionID() !== undefined ? { returnSessionID: returnSessionID() } : {}),
         },
       })
@@ -494,6 +518,16 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     }
 
     const back = () => {
+      // 从总览进来的回总览（保留会话回程键），否则回来源会话/主页
+      if (from() === "overview") {
+        ctx.ui.router.navigate({
+          type: "plugin",
+          name: "overview",
+          data:
+            returnSessionID() !== undefined ? { returnSessionID: returnSessionID() } : undefined,
+        })
+        return
+      }
       const sid = returnSessionID()
       ctx.ui.router.navigate(sid !== undefined ? { type: "session", sessionID: sid } : { type: "home" })
     }
@@ -552,10 +586,156 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     )
   }
 
-  // plugin 路由注册：node 页（RowLine 点击导航至此；宿主缺 router 时降级不注册）
-  const offPage = ctx.ui.router?.register({
+  /* ---------------------------------------------------------------- *
+   * 全屏总览（v0.8.10，v1 RouteView 对位）
+   *
+   * /workflow 进入：头部摘要条（run 数 + 状态 chips）+ 全 run 平铺树
+   * （默认全展开；共享面板/侧栏的折叠态），j/k 回绕选节点行、Enter 进
+   * 节点详情（from:overview 回程链）、Esc 返回会话。选中越屏时
+   * scrollChildIntoView 跟随（行渲染体 id 登记表，v1 同法）。
+   * ---------------------------------------------------------------- */
+  const OverviewView = (props: { data?: Record<string, unknown> }) => {
+    const returnSessionID = () => (props.data?.returnSessionID as string | undefined) ?? undefined
+    const [selected, setSelected] = createSignal<string | undefined>(undefined)
+    // 行选中键 -> 行渲染体 id（滚动跟随）；行重渲时同键覆盖，不清理也不涨
+    const rowRenderableIds = new Map<string, string>()
+    let scrollBox: ScrollBoxRenderable | undefined
+
+    /** 总览正文 = 全展开的 run 树（默认每棵都展开；override 折叠仍生效） */
+    const bodyRows = createMemo(() =>
+      renderPanelRows(runs(), Date.now(), {
+        collapseOverride: collapseOverride(),
+        expandedRuns: Number.MAX_SAFE_INTEGER,
+        maxWidth: 120,
+      }),
+    )
+    const selectKeys = createMemo(() =>
+      bodyRows()
+        .map(rowSelectionKey)
+        .filter((k): k is string => k !== undefined),
+    )
+
+    const move = (delta: number) => {
+      const next = moveSelection(selectKeys(), selected(), delta)
+      if (next === undefined || next === selected()) return
+      setSelected(next)
+      const childId = rowRenderableIds.get(next)
+      if (childId !== undefined) scrollBox?.scrollChildIntoView(childId)
+    }
+
+    const selectedRow = () => bodyRows().find((r) => rowSelectionKey(r) === selected())
+
+    const openSelected = () => {
+      const row = selectedRow()
+      if (row?.runId === undefined) return
+      ctx.ui.router.navigate({
+        type: "plugin",
+        name: "node",
+        data: {
+          runId: row.runId,
+          ...(row.stepName !== undefined ? { step: row.stepName } : {}),
+          from: "overview",
+          ...(returnSessionID() !== undefined ? { returnSessionID: returnSessionID() } : {}),
+        },
+      })
+    }
+
+    const back = () => {
+      const sid = returnSessionID()
+      ctx.ui.router.navigate(sid !== undefined ? { type: "session", sessionID: sid } : { type: "home" })
+    }
+
+    ctx.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        { id: "agentic-workflow.overview.up", title: "Previous node", bind: "up", run: () => move(-1) },
+        { id: "agentic-workflow.overview.up.k", bind: "k", run: () => move(-1) },
+        { id: "agentic-workflow.overview.down", title: "Next node", bind: "down", run: () => move(1) },
+        { id: "agentic-workflow.overview.down.j", bind: "j", run: () => move(1) },
+        { id: "agentic-workflow.overview.open", title: "Open node detail", bind: "enter", run: () => openSelected() },
+        { id: "agentic-workflow.overview.back", title: "Back", bind: "escape", run: () => back() },
+        { id: "agentic-workflow.overview.back.q", bind: "q", run: () => back() },
+      ],
+      bindings: [
+        "agentic-workflow.overview.up",
+        "agentic-workflow.overview.up.k",
+        "agentic-workflow.overview.down",
+        "agentic-workflow.overview.down.j",
+        "agentic-workflow.overview.open",
+        "agentic-workflow.overview.back",
+        "agentic-workflow.overview.back.q",
+      ],
+    }))
+
+    const headerRows = () => renderOverviewHeaderRows(runs(), Date.now(), { maxWidth: 120 })
+
+    return (
+      <box
+        position="absolute"
+        left={0}
+        top={0}
+        width="100%"
+        height="100%"
+        flexDirection="column"
+        backgroundColor={ctx.theme.background.base}
+        paddingTop={1}
+        paddingLeft={2}
+        paddingRight={2}
+      >
+        {headerRows().map((row, i) => (
+          <RowText key={i} theme={ctx.theme} row={row} />
+        ))}
+        <scrollbox
+          flexGrow={1}
+          flexDirection="column"
+          ref={(el: ScrollBoxRenderable) => {
+            scrollBox = el
+          }}
+        >
+          {bodyRows().map((row) => {
+            const key = rowSelectionKey(row)
+            const isSelected = key !== undefined && key === selected()
+            return (
+              <box
+                flexDirection="row"
+                backgroundColor={isSelected ? ctx.theme.background.raised.base : undefined}
+                onMouseDown={() => {
+                  // 头行点击 = 折叠切换（与面板一致）；节点行点击 = 选中并进详情
+                  if (row.collapsible === true) {
+                    toggleCollapse(row)
+                    return
+                  }
+                  if (key === undefined) return
+                  setSelected(key)
+                  openSelected()
+                }}
+                ref={(el: Renderable) => {
+                  if (key !== undefined) rowRenderableIds.set(key, el.id)
+                }}
+              >
+                <box width={2}>
+                  <text fg={isSelected ? undefined : ctx.theme.text.muted}>{isSelected ? "▸ " : "  "}</text>
+                </box>
+                <RowText theme={ctx.theme} row={row} />
+              </box>
+            )
+          })}
+        </scrollbox>
+        <box paddingTop={1}>
+          <text fg={ctx.theme.text.muted}>j/k 上下选择 · Enter 节点详情 · Esc 返回</text>
+        </box>
+      </box>
+    )
+  }
+
+  // plugin 路由注册：node 页（RowLine 点击导航至此）；overview 页（/workflow 进入）
+  const offNodePage = ctx.ui.router?.register({
     name: "node",
     render: (input) => <NodeView data={input.data} />,
+  })
+  const offOverviewPage = ctx.ui.router?.register({
+    name: "overview",
+    render: (input) => <OverviewView data={input.data} />,
   })
 
   return () => {
@@ -564,6 +744,7 @@ function setupProgressPanel(ctx: TuiContext): () => void {
     offFooter()
     offSidebar()
     offHomeFooter()
-    offPage?.()
+    offNodePage?.()
+    offOverviewPage?.()
   }
 }

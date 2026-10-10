@@ -11,6 +11,9 @@ import {
   formatDuration,
   renderDetailRows,
   renderNodeRows,
+  renderOverviewHeaderRows,
+  moveSelection,
+  rowSelectionKey,
   renderDetailSection,
   renderHomeFooterRows,
   renderPanelRows,
@@ -694,4 +697,75 @@ test("renderNodeRows: run 级节点——概况 + 步骤清单 + args", () => {
 test("renderNodeRows: 快照与 journal 均无记录 -> 找不到数据提示", () => {
   const rows = renderNodeRows({}, 20_000)
   assert.ok(rows.some((r) => r.text === "找不到该节点的数据（快照与 journal 均无记录）"))
+})
+
+/* ------------- v0.8.10 全屏总览：header chips / 选中键 / 回绕导航 ------------- */
+
+test("renderOverviewHeaderRows: 标题 + run chips（running/failed 后缀）；空板占位", () => {
+  assert.deepEqual(renderOverviewHeaderRows([]), [
+    { text: "Agentic Workflow", bold: true },
+    { text: "(no runs yet — start one with workflow_start)", tone: "muted" },
+  ])
+  const rows = renderOverviewHeaderRows(
+    [
+      snapshot({ runId: "run_1", status: "running" }),
+      snapshot({ runId: "run_2", startedAt: 1_000, status: "completed", completedAt: 2_000 }),
+    ],
+    10_000,
+  )
+  assert.equal(rows[0]?.text, "Workflow · 2 个 run · 1 running")
+  assert.equal(rows[0]?.bold, true)
+  // chip：状态图标 + 标题 + done/total + running 计数
+  assert.ok(rows[1]?.text.includes("▶ feature-development@1.0.0 1/3 · 1 running"))
+  assert.ok(rows[1]?.text.includes("✓ feature-development@1.0.0 1/3"))
+  assert.equal(rows[1]?.tone, "muted")
+})
+
+test("renderOverviewHeaderRows: chips 超预算截断（maxChips）", () => {
+  const many = Array.from({ length: 9 }, (_, i) =>
+    snapshot({ runId: `run_${i}`, startedAt: 1_000, status: "completed", completedAt: 2_000 }),
+  )
+  const rows = renderOverviewHeaderRows(many, 10_000, { maxChips: 4 })
+  assert.ok(rows[1]?.text.includes("… +5"))
+})
+
+test("rowSelectionKey: 节点行可选中（步骤/子run），折叠头行与结构行不可", () => {
+  const header: PanelRow = { text: "▼ ✓ run", runId: "run_1", collapsible: true, collapsed: false }
+  const step: PanelRow = { text: "  ✓ gather", runId: "run_1", stepName: "gather" }
+  const child: PanelRow = { text: "  ↳ ✓ child · subflow", runId: "run_c" }
+  const plain: PanelRow = { text: "Agentic Workflow", bold: true }
+  assert.equal(rowSelectionKey(header), undefined)
+  assert.equal(rowSelectionKey(step), "run_1|step:gather")
+  assert.equal(rowSelectionKey(child), "run_c|run")
+  assert.equal(rowSelectionKey(plain), undefined)
+})
+
+test("moveSelection: 回绕导航；当前键缺席按方向取首/尾；空序列保持 undefined", () => {
+  const keys = ["a", "b", "c"]
+  assert.equal(moveSelection(keys, undefined, 1), "a")
+  assert.equal(moveSelection(keys, undefined, -1), "c")
+  assert.equal(moveSelection(keys, "a", -1), "c")
+  assert.equal(moveSelection(keys, "c", 1), "a")
+  assert.equal(moveSelection(keys, "b", 1), "c")
+  assert.equal(moveSelection(keys, "b", -1), "a")
+  assert.equal(moveSelection(["a"], "a", 1), "a")
+  assert.equal(moveSelection([], undefined, 1), undefined)
+  assert.equal(moveSelection(keys, "gone", 1), "a")
+})
+
+test("renderPanelRows: expandedRuns 全展开——旧 run 步骤树也可见（总览默认）", () => {
+  const first = snapshot({ runId: "run_1", status: "completed", completedAt: 9_000 })
+  const second = snapshot({
+    runId: "run_2",
+    startedAt: 1_000,
+    status: "completed",
+    completedAt: 2_000,
+    steps: [{ index: 0, name: "gather", status: "completed", startedAt: 1_000, completedAt: 2_000 }],
+  })
+  const rows = renderPanelRows([first, second], 10_000, { expandedRuns: Number.MAX_SAFE_INTEGER })
+  // 两个 run 都展开（▼），第二个 run 的步骤行带归属 runId 可选中
+  assert.equal(rows[1]?.text.startsWith("▼ "), true)
+  const secondHeader = rows.find((r) => r.runId === "run_2" && r.collapsible === true)
+  assert.ok(secondHeader !== undefined)
+  assert.equal(rowSelectionKey(rows.find((r) => r.runId === "run_2" && r.stepName === "gather")!), "run_2|step:gather")
 })

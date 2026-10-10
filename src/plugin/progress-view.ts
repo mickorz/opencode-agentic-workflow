@@ -699,3 +699,71 @@ export function renderNodeRows(input: NodeViewInput, now: number = Date.now()): 
   })
   return rows
 }
+
+/* ------------------------------------------------------------------ *
+ * 全屏总览（v0.8.10，批次 C 收尾；v1 RouteView 对位）
+ *
+ * /workflow 进整页：头部摘要条（run 数 + 状态 chips）+ 全 run 平铺树
+ * （默认全展开，共享面板的折叠态），j/k 回绕选节点行、Enter 进节点详情、
+ * Esc 返回。选中行模型出自纯函数层，JSX 只做高亮与滚动跟随。
+ * ------------------------------------------------------------------ */
+
+/** 总览头部行：标题行 + run chips 行（超预算截断；空板给出占位提示） */
+export function renderOverviewHeaderRows(
+  runs: readonly RunProgressSnapshot[],
+  now: number = Date.now(),
+  options?: PanelLinesOptions & { maxChips?: number },
+): PanelRow[] {
+  if (runs.length === 0) {
+    return [
+      { text: "Agentic Workflow", bold: true },
+      { text: "(no runs yet — start one with workflow_start)", tone: "muted" },
+    ]
+  }
+  const running = runs.filter((r) => r.status === "running").length
+  const title = `Workflow · ${runs.length} 个 run${running > 0 ? ` · ${running} running` : ""}`
+
+  const maxChips = options?.maxChips ?? 6
+  const chips: string[] = []
+  for (const [i, run] of runs.entries()) {
+    if (chips.length >= maxChips) {
+      chips.push(`… +${runs.length - maxChips}`)
+      break
+    }
+    const vm = toRunViewModel(run, now)
+    const done = vm.steps.filter((s) => s.status === "completed").length
+    const failed = vm.steps.filter((s) => s.status === "failed").length
+    const parts = [`${vm.glyph} ${vm.title} ${done}/${vm.steps.length}`]
+    if (vm.runningCount > 0) parts.push(`${vm.runningCount} running`)
+    if (failed > 0) parts.push(`${failed} failed`)
+    chips.push(`${i === 0 ? "" : " "}${parts.join(" · ")}`)
+  }
+  return [
+    { text: title, bold: true },
+    { text: truncate(chips.join(""), options?.maxWidth), tone: "muted" },
+  ]
+}
+
+/**
+ * 行 -> 选中键（跨树唯一，展示序即导航序）：步骤行 / 子 run 行可选中；
+ * 折叠头行与结构行不可（v1 语义：只有 node 行参与 j/k 导航）。
+ */
+export function rowSelectionKey(row: PanelRow): string | undefined {
+  if (row.collapsible === true) return undefined
+  if (row.runId === undefined) return undefined
+  if (row.stepName !== undefined) return `${row.runId}|step:${row.stepName}`
+  return `${row.runId}|run`
+}
+
+/** 选中键序列内回绕移动（v1 moveSelection 对位）：越界回绕；当前键不在
+ *  序列（数据更新/初进）时按方向取首/尾；空序列保持 undefined */
+export function moveSelection(
+  keys: readonly string[],
+  current: string | undefined,
+  delta: number,
+): string | undefined {
+  if (keys.length === 0) return undefined
+  const index = current !== undefined ? keys.indexOf(current) : -1
+  if (index === -1) return delta >= 0 ? keys[0] : keys[keys.length - 1]
+  return keys[(index + delta + keys.length) % keys.length]
+}
