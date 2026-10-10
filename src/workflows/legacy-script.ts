@@ -26,7 +26,7 @@
  */
 
 import { exec } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 
 import type { WorkflowDefinition, WorkflowContext } from "../registry/definition.js"
@@ -41,6 +41,16 @@ import {
   getCheckpointGate,
   WorkflowCheckpointError,
 } from "../quality/checkpoint.js"
+
+/** 插件运行时版本（dist 与 src 同层读取 package.json；读不到保持 unknown） */
+let runtimeVersion = "unknown"
+try {
+  runtimeVersion =
+    JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version ??
+    "unknown"
+} catch {
+  // 布局异常时保持 unknown：只影响诊断信息，不影响功能
+}
 
 /** v1 全局注入参数表（顺序即包裹函数形参序） */
 export const LEGACY_GLOBAL_PARAMS = [
@@ -63,6 +73,7 @@ export const LEGACY_GLOBAL_PARAMS = [
   "checkpoint",
   "workflow",
   "console",
+  "version",
 ] as const
 
 /** v1 脚本形态识别：含 export const meta 且不含 defineWorkflow */
@@ -778,6 +789,9 @@ export function buildLegacyDefinition(
         error: (m: unknown) => log(`[error] ${typeof m === "string" ? m : JSON.stringify(m) ?? String(m)}`),
       }
 
+      /** v2 扩展全局：返回插件运行时版本（诊断/联调用；v1 原生无此全局） */
+      const version = (): string => runtimeVersion
+
       const globals: unknown[] = [
         phase,
         agent,
@@ -798,6 +812,7 @@ export function buildLegacyDefinition(
         checkpoint,
         workflow,
         consoleShim,
+        version,
       ]
 
       const result = await bodyFn(...globals)

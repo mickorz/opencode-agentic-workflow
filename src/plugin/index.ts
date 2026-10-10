@@ -80,7 +80,7 @@ export default Plugin.define({
   id: "agentic-workflow",
 
   async setup(ctx) {
-    console.log(`[agentic-workflow] loaded: ${ctx.location.directory}`)
+    console.log(`[agentic-workflow] loaded: ${ctx.location.directory} (v${pluginVersion})`)
 
     const options = ctx.options as {
       model?: ExecutorModelRef
@@ -383,6 +383,7 @@ export default Plugin.define({
         description:
           "Run a registered agentic workflow (flow = workflow id). Available workflows:\n" +
           `${registry.summarize()}\n` +
+          `Plugin runtime: v${pluginVersion}. Query it anytime with flow="__version" (no run, instant).\n` +
           "Returns the workflow's final output. " +
           "Do NOT call this tool from inside a workflow; do the work directly instead.",
         input: {
@@ -450,6 +451,15 @@ export default Plugin.define({
               checkpointMode?: unknown
               background?: unknown
             }) ?? {}
+          // 版本直查（零成本诊断，不建 run 不进 journal；run 内调用也放行）
+          if (parsed.flow === "__version" && parsed.resumeRunId === undefined) {
+            return {
+              output:
+                `@mickorz/opencode-agentic-workflow v${pluginVersion}\n` +
+                `loaded from: ${ctx.location.directory}\n` +
+                `registered flows (live):\n${registry.summarize()}`,
+            }
+          }
           // 递归防护：来自 run 内部（executor 登记会话自身或其祖先）→ 拒绝；
           // 会话身份缺失（宿主异常）时保守退回旧单飞语义
           const callerSessionID = context?.sessionID

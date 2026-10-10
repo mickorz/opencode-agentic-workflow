@@ -90,6 +90,8 @@ return { output: approved ? draft : `${draft}（未经人工批准）` }
 - `workflow(ref, subArgs?)`：子流程。ref 三形态：注册名 `'five_sentences'` /
   脚本路径 `'./x.js'` / 对象 `{ scriptPath, label }`；返回子流返回值本体
   （对象可直取字段）
+- `version()` → 版本字符串（如 `'0.8.7'`）——插件运行时版本，诊断/联调用
+  （v2 扩展全局）
 - 其他：`phase(name)`（阶段标记，进日志与事件）/ `log(...)` / `args` /
   `console`（shim）/ `setConcurrency(n)`（警告后忽略——并发由 executor
   统一管理）

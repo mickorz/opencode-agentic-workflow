@@ -38,6 +38,9 @@ opencode run "用 workflow 工具跑 sentence_demo，args.topic=雨，checkpoint
 - `.agw/trace/events.jsonl` —— 事件流
 - TUI 面板 —— subflow 应**合并为一行**（0.8.5 去重）、终态 run 只留最新 3 条
 
+版本直查（0.8.7+）：会话里让 agent 调 workflow 工具 `flow="__version"`
+（零成本不建 run）；流程脚本内用全局 `version()`。
+
 ## 边界与提醒
 
 1. **插件随 opencode 进程加载一次就冻结**：改 src → build 后，必须重启 opencode

@@ -480,6 +480,16 @@ return typeof r === 'string' ? r : r.output
   assert.equal(result, "纯文本句子")
 })
 
+test("version()：返回插件运行时版本（与 package.json 一致）", async () => {
+  const source = `export const meta = { name: 'ver_check' }
+return version()
+`
+  const { result } = await runV1Script(source, { executor: echoExecutor() })
+  const pkgVersion = JSON.parse(await fs.readFile("package.json", "utf8")).version
+  assert.equal(result, pkgVersion)
+  assert.match(String(result), /^\d+\.\d+\.\d+$/)
+})
+
 test("workflow：路径形与对象形引用经装载索引解析（脚本一字不改）", async () => {
   const proj = await fs.mkdtemp(path.join(os.tmpdir(), "agw-legacy-ref-"))
   const nativeDir = path.join(proj, "scripts", "native")
