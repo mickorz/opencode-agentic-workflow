@@ -685,9 +685,11 @@ function setupProgressPanel(ctx: TuiContext): () => void {
         paddingLeft={2}
         paddingRight={2}
       >
-        {headerRows().map((row, i) => (
-          <RowText key={i} theme={ctx.theme} row={row} />
-        ))}
+        <box flexDirection="column">
+          {headerRows().map((row, i) => (
+            <RowText key={i} theme={ctx.theme} row={row} />
+          ))}
+        </box>
         <scrollbox
           flexGrow={1}
           flexDirection="column"
