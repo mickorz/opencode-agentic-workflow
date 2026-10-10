@@ -122,3 +122,22 @@ workflow 工具描述里 flow 清单为空/不含目标 id，就**静默丢掉 f
 正确），但 service 常驻会话与项目级配置的交叉下，枚举可见性不稳定。
 **稳定姿势**：提示词里强令「flow 参数必须显式传 X，即使枚举没列出也
 照传（未知 id 触发 v0.6.1 自动重扫）」——单跑与批跑均验证有效。
+
+## 附：批量跑批的坑（运维侧，两连坑）
+
+**坑 A——配额误写 .done，重跑标记失真**。批跑脚本用 `log.done`
+文件做断点续跑标记，它在 `opencode run` 退出后无条件写入——但 GLM
+「5 小时滚动使用上限」打满时会话起不来、直接退出（stderr：
+`已达到 5 小时的使用上限`），flow 根本没启动，`.done` 照写。结果：
+重跑轮把配额阵亡的 flow 全部 SKIP 掉，且**永远不会有对应 journal**。
+判据：`.done` ≠ 完成；证据只能信 journal 终态。配额阵亡特征 =
+日志尾部 quota 文案 + journal 无该 flow 任何记录。
+
+**坑 B——杀批留僵尸 run，占满并发槽**。`opencode run` 客户端被杀
+（SIGTERM/机器休眠）后，workflow run 在共享 service 里可能仍在执行或
+悬挂；`workflow_control action=stop` 是**协作式停止**——要等下一个
+step 边界才生效，执行循环已死的僵尸永远等不到边界，journal 永停
+`running`，且继续占住 `maxConcurrentRuns` 槽位（实测 3 槽全占，新 flow
+启动直接被拒）。**恢复姿势**：`opencode service restart` 清内存注册表
+（会杀掉自己会话的 server，会自动重连）；磁盘上的 running 僵尸 journal
+无害，汇总时按「取最新终态、running 绕行」处理。
