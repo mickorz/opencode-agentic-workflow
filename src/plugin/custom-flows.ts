@@ -63,7 +63,8 @@ export function formatUnknownFlowMessage(params: {
     `available: ${availableIds.join(", ")}${errorHint}` +
     `\n[plugin v${pluginVersion}; plugins load once per opencode process - ` +
     `if the flow file was added after this process started or v looks outdated, ` +
-    `fully restart opencode (a new chat does not reload plugins)]`
+    `fully restart opencode INCLUDING any background "opencode serve" daemon ` +
+    `(it survives pkill/SIGTERM - use kill -9; a new chat does not reload plugins)]`
   )
 }
 
