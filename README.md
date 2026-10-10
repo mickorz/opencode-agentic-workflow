@@ -445,9 +445,10 @@ v1（opencode-dynamicworkflows）TUI 显示功能对齐第一、二批（对比�
 - **主题语义色**：运行黄（warning）/ 成功绿（success）/ 失败红（error）/
   次要灰（muted）四档，取自宿主 `ctx.theme`（跟随主题与深浅色模式）；
   头行加粗。终态 run 不再显示 running 计数（停表语义）
-- **信息密度**：run 头行显示 `N running` 与 token 合计；列表步骤行直接
-  带 `· 1.5k tok · 模型` 后缀（快照事件透传 usage/model，不用等 detail
-  区拉取）；detail 头行同样带 token 合计
+- **信息密度**：run 头行显示 `N running`；列表步骤行带 `· 模型` 后缀
+  （快照事件透传 usage/model）；token 数据不占列表行——在节点详情视图
+  的元数据行查看（`25.9k tok (in 700 / out 500)`）。v0.10.3 起 token
+  展示撤出面板行（用户产品决策：列表行只留状态语义）
 - **重试/超时可观测（v0.10.0）**：配置了 `retries` 的 agent 步骤行与
   节点详情状态头显示重试进度 `(2/3)`（成功 = 第几次尝试，失败 = 尝试
   到第几次耗尽）；配置了 `timeoutMs` 的步骤时长带单次尝试上限

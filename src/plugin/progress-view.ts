@@ -172,18 +172,16 @@ function truncate(text: string, maxWidth: number | undefined): string {
   return `${text.slice(0, Math.max(1, maxWidth - 1))}…`
 }
 
-/** run 头行后缀：running 计数 + token 合计（v1 headerLine 信息密度对位） */
+/** run 头行后缀：running 计数（v0.10.3 起 token 展示撤出面板行——用户决策） */
 function runHeaderSuffix(vm: RunViewModel): string {
   const parts: string[] = []
   if (vm.runningCount > 0) parts.push(`${vm.runningCount} running`)
-  if (vm.tokensTotal !== undefined) parts.push(`${vm.tokensTotal} tok`)
   return parts.length > 0 ? `  · ${parts.join(" · ")}` : ""
 }
 
-/** 步骤行后缀：token + 模型（与 detail 区同款分隔风格） */
+/** 步骤行后缀：模型（token 展示撤出面板行；数据仍在节点视图详情里） */
 function stepMetaSuffix(step: StepViewModel): string {
   const parts: string[] = []
-  if (step.tokens !== undefined) parts.push(`${step.tokens} tok`)
   if (step.model !== undefined) parts.push(step.model)
   return parts.length > 0 ? `  · ${parts.join(" · ")}` : ""
 }
@@ -548,12 +546,8 @@ export function renderDetailRows(
       step.startedAt !== undefined
         ? `  ${formatDuration(Math.max(0, (step.completedAt ?? now) - step.startedAt))}`
         : ""
-    // P2-8b 元数据后缀：模型 + token 合计（input+output+reasoning；reasoning
-    // 已含于 output 时宿主报 0，不会重复计）
+    // P2-8b 元数据后缀：模型（v0.10.3 token 撤出列表行；数据在节点视图详情）
     const meta: string[] = []
-    if (step.usage !== undefined) {
-      meta.push(`${formatTokens(usageToTokens(step.usage))} tok`)
-    }
     if (step.model !== undefined) meta.push(step.model)
     const metaSuffix = meta.length > 0 ? `  · ${meta.join(" · ")}` : ""
     rows.push({

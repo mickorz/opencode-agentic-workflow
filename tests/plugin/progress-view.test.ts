@@ -168,7 +168,7 @@ test("renderPanelRows: 最新 run 展开步骤树，其余收为单行；失败�
   assert.equal(running[4]?.tone, "muted")
 })
 
-test("renderPanelRows: 头行带 running 计数与 token 合计后缀", () => {
+test("renderPanelRows: 头行带 running 计数后缀（v0.10.3 token 撤出面板行）", () => {
   const rows = renderPanelRows(
     [
       snapshot({
@@ -187,9 +187,9 @@ test("renderPanelRows: 头行带 running 计数与 token 合计后缀", () => {
     ],
     NOW,
   )
-  assert.equal(rows[1]?.text, "▼ ▶ feature-development@1.0.0  6.0s  · 1 running · 1.0k tok")
-  // 步骤行元数据后缀：token + 模型
-  assert.equal(rows[2]?.text, "  ✓ gather  2.0s  · 1.0k tok")
+  assert.equal(rows[1]?.text, "▼ ▶ feature-development@1.0.0  6.0s  · 1 running")
+  // 步骤行元数据后缀：仅模型（token 数据保留在节点视图详情）
+  assert.equal(rows[2]?.text, "  ✓ gather  2.0s")
 })
 
 test("renderPanelRows: maxWidth 截断加省略号（标题行不截断）", () => {
@@ -504,9 +504,9 @@ test("renderDetailRows: 步骤 token/模型元数据后缀", () => {
     ],
   }
   const rows = renderDetailRows(detail, 1000)
-  // v0.7.0：detail 头行也带 token 合计后缀（v1 Inspector 元数据行对位）
-  assert.equal(rows[0]?.text, "✓ w@1.0.0 · completed · 1.0s  · 1.5k tok")
-  assert.equal(rows[2]?.text, "  ✓ gather  1.0s  · 1.5k tok · glm/glm-5.3-flash")
+  // v0.10.3：token 撤出列表行（头行只剩状态与时长，步骤行只剩模型）
+  assert.equal(rows[0]?.text, "✓ w@1.0.0 · completed · 1.0s")
+  assert.equal(rows[2]?.text, "  ✓ gather  1.0s  · glm/glm-5.3-flash")
   assert.equal(rows[3]?.text, "    → o")
   // 无元数据步骤不加后缀（0 时长按 "0s"）
   assert.equal(rows[4]?.text, "  ✓ check  0s")
