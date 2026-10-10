@@ -47,6 +47,9 @@ interface ProgressRegistration {
 export interface ProgressBoardOptions {
   /** 近期 run 保留上限（默认 20） */
   capacity?: number
+  /** 顶层终态 run 保留条数（默认 3）：更旧的连同子树淘汰，防面板随会话
+   *  历史无限堆积；运行中 run 及其 subflow 子树不受影响 */
+  keepTerminal?: number
   /** 事件总线（默认全局 bus；测试注入） */
   bus?: EventBus
   /** 初始种子（bind 时由 store 读出） */
@@ -57,6 +60,7 @@ export class ProgressBoard {
   private readonly runs = new Map<string, RunProgressSnapshot>()
   private readonly order: string[] = []
   private readonly capacity: number
+  private readonly keepTerminal: number
   private unsubscribe: (() => void) | undefined
 
   constructor(
@@ -64,6 +68,7 @@ export class ProgressBoard {
     options?: ProgressBoardOptions,
   ) {
     this.capacity = options?.capacity ?? 20
+    this.keepTerminal = options?.keepTerminal ?? 3
     for (const run of options?.seed ?? []) {
       this.apply(run, { forward: false })
     }
@@ -100,8 +105,49 @@ export class ProgressBoard {
       const evicted = this.order.pop()
       if (evicted !== undefined) this.runs.delete(evicted)
     }
+    this.trimTerminal()
     if (forward) {
       this.emit(run)
+    }
+  }
+
+  /**
+   * 终态瘦身（v0.8.5）：顶层终态 run 只保留最新 keepTerminal 条，更旧的
+   * 连同其 subflow 子树一起淘汰——面板不随会话历史无限堆积。运行中 run
+   * 及其子孙不受影响；孤儿（parentRunId 指向不在板上的 run）按顶层计。
+   */
+  private trimTerminal(): void {
+    // 自旧向新收集顶层终态 run（order 为 newest first，自尾向头遍历）
+    const terminalTop: string[] = []
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const id = this.order[i]!
+      const run = this.runs.get(id)
+      if (run === undefined) continue
+      if (run.parentRunId !== undefined && this.runs.has(run.parentRunId)) continue
+      if (run.status === "running") continue
+      terminalTop.push(id)
+    }
+    const surplus = Math.max(0, terminalTop.length - this.keepTerminal)
+    if (surplus === 0) return
+    const doomed = new Set(terminalTop.slice(0, surplus))
+    // 子树传染（防御：运行中的子孙不淘汰，宁可留成孤儿也不清跑态）
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const [cid, crun] of this.runs) {
+        if (doomed.has(cid) || crun.status === "running") continue
+        if (crun.parentRunId !== undefined && doomed.has(crun.parentRunId)) {
+          doomed.add(cid)
+          grew = true
+        }
+      }
+    }
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const id = this.order[i]!
+      if (doomed.has(id)) {
+        this.order.splice(i, 1)
+        this.runs.delete(id)
+      }
     }
   }
 

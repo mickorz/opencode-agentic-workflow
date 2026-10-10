@@ -194,8 +194,67 @@ test("renderPanelRows: maxWidth 截断加省略号（标题行不截断）", () 
   assert.ok(rows[1]?.text.endsWith("…"))
 })
 
-test("P2-9 lineage：subflow 子 run 缩进挂在父 run 下（深度感知 + 失败摘要）", () => {
-  const parent = snapshot({ runId: "run_p", startedAt: 5000, status: "running" })
+test("v0.8.5 subflow 去重：subflow:<id> 步骤行被对应子 run 行取代（同位置，只显示一次）", () => {
+  const parent = snapshot({
+    runId: "run_p",
+    startedAt: 5_000,
+    status: "running",
+    steps: [
+      { index: 0, name: "prepare", status: "completed", startedAt: 5_000, completedAt: 6_000 },
+      { index: 1, name: "subflow:sentence_poet", status: "completed", startedAt: 6_000, completedAt: 8_000 },
+      { index: 2, name: "subflow:sentence_scientist", status: "completed", startedAt: 6_000, completedAt: 9_000 },
+    ],
+  })
+  const poet = snapshot({
+    runId: "run_poet",
+    workflow: { id: "sentence_poet", version: "1.0.0" },
+    startedAt: 6_000,
+    completedAt: 8_000,
+    status: "completed",
+    parentRunId: "run_p",
+    depth: 1,
+    steps: [],
+  })
+  const scientist = snapshot({
+    runId: "run_sci",
+    workflow: { id: "sentence_scientist", version: "1.0.0" },
+    startedAt: 6_000,
+    completedAt: 9_000,
+    status: "completed",
+    parentRunId: "run_p",
+    depth: 1,
+    steps: [],
+  })
+  const rows = renderPanelRows([parent, poet, scientist], NOW)
+  assert.deepEqual(texts(rows), [
+    "Agentic Workflow",
+    "▶ feature-development@1.0.0  5.0s",
+    "  ✓ prepare  1.0s",
+    // subflow 步骤行被子 run 行取代：同位置、步骤缩进、只出现一次
+    "  ↳ ✓ sentence_poet@1.0.0  2.0s · subflow",
+    "  ↳ ✓ sentence_scientist@1.0.0  3.0s · subflow",
+  ])
+})
+
+test("v0.8.5 subflow 去重：子 run 不在板上时回退步骤行（不丢信息）", () => {
+  const parent = snapshot({
+    runId: "run_p",
+    startedAt: 5_000,
+    status: "running",
+    steps: [
+      { index: 0, name: "subflow:sentence_poet", status: "completed", startedAt: 5_000, completedAt: 8_000 },
+    ],
+  })
+  // 板上没有 sentence_poet 子 run（如被容量裁剪）——步骤行照常显示
+  const rows = renderPanelRows([parent], NOW)
+  assert.deepEqual(texts(rows), [
+    "Agentic Workflow",
+    "▶ feature-development@1.0.0  5.0s",
+    "  ✓ subflow:sentence_poet  3.0s",
+  ])
+})
+
+test("P2-9 lineage：subflow 子 run 缩进挂在父 run 下（深度感知 + 失败摘要）", () => {  const parent = snapshot({ runId: "run_p", startedAt: 5000, status: "running" })
   const child = snapshot({
     runId: "run_c",
     startedAt: 6000,

@@ -13,13 +13,22 @@ import { createEventBus, emitEvent, setEventBus, type RunProgressSnapshot } from
 import { FileExecutionStore } from "../../src/state/file-store.js"
 import { RunJournal } from "../../src/state/recorder.js"
 
-function snapshot(runId: string, startedAt: number, status = "running"): RunProgressSnapshot {
+function snapshot(
+  runId: string,
+  startedAt: number,
+  status = "running",
+  parentRunId?: string,
+  depth?: number,
+): RunProgressSnapshot {
   return {
     runId,
     workflow: { id: "demo", version: "1.0.0" },
     status,
     startedAt,
     steps: [{ index: 0, name: "only", status: "running" }],
+    ...(parentRunId !== undefined
+      ? { parentRunId, ...(depth !== undefined ? { depth } : {}) }
+      : {}),
   }
 }
 
@@ -64,6 +73,40 @@ test("容量淘汰：超出上限淘汰最旧", () => {
   assert.deepEqual(
     board.list().map((r) => r.runId),
     ["run_c", "run_b"],
+  )
+  board.dispose()
+})
+
+test("v0.8.5 终态瘦身：顶层终态只留最新 keepTerminal 条（默认 3），运行中永不淘汰", () => {
+  const board = new ProgressBoard(() => {}, { bus: createEventBus() })
+  for (const [i, id] of ["run_1", "run_2", "run_3", "run_4"].entries()) {
+    board.apply(snapshot(id, 100 * (i + 1)), { forward: false })
+    board.apply(snapshot(id, 100 * (i + 1), "completed"), { forward: false })
+  }
+  // 第 5 个是运行中的——不受瘦身影响
+  board.apply(snapshot("run_5", 500), { forward: false })
+  assert.deepEqual(
+    board.list().map((r) => r.runId),
+    ["run_5", "run_4", "run_3", "run_2"],
+  )
+  board.dispose()
+})
+
+test("v0.8.5 终态瘦身：被淘汰的终态父 run 连同 subflow 子树一起清", () => {
+  const board = new ProgressBoard(() => {}, { bus: createEventBus() })
+  // 最旧：父 + 其子（终态）——应整树淘汰
+  board.apply(snapshot("parent_old", 100), { forward: false })
+  board.apply(snapshot("child_old", 150, "completed", "parent_old", 1), { forward: false })
+  board.apply(snapshot("parent_old", 200, "completed"), { forward: false })
+  // 3 个较新的终态顶层 run（占满默认 keepTerminal=3；时间戳互异保证顺序确定）
+  const ts: Record<string, number> = { run_a: 310, run_b: 330, run_c: 350 }
+  for (const id of ["run_a", "run_b", "run_c"]) {
+    board.apply(snapshot(id, ts[id]!), { forward: false })
+    board.apply(snapshot(id, ts[id]!, "completed"), { forward: false })
+  }
+  assert.deepEqual(
+    board.list().map((r) => r.runId),
+    ["run_c", "run_b", "run_a"],
   )
   board.dispose()
 })

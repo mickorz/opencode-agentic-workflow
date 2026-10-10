@@ -171,7 +171,16 @@ function stepMetaSuffix(step: StepViewModel): string {
  * 整板 -> 结构化展示行（最新顶层 run 展开步骤树，其余收为一行摘要；
  * subflow 子 run 按 parentRunId 缩进挂在父 run 下，深度再加两格）。
  * 面板组件逐行渲染并按 tone 上色；单测直接断言行对象。
+ *
+ * v0.8.5 subflow 去重：legacy 流程的 `subflow:<id>` 父步骤行与子 run 行
+ * 原本各渲染一次（同一事件两行、两组顺序）。现按步骤位置合并——步骤行
+ * 被对应子 run 行取代（缩进与步骤同级），每个 subflow 只显示一次且随
+ * journal 步骤序；子 run 不在板上时回退显示步骤行（防御种子/裁剪不一致）。
  */
+
+/** legacy 适配层的 subflow 步骤名：`subflow:<id>` / `subflow:<id>(<label>)` */
+const SUBFLOW_STEP_RE = /^subflow:([A-Za-z0-9_-]+)/
+
 export function renderPanelRows(
   runs: readonly RunProgressSnapshot[],
   now: number = Date.now(),
@@ -200,10 +209,12 @@ export function renderPanelRows(
   const expanded = options?.expandedRuns ?? 1
   const rows: PanelRow[] = [{ text: "Agentic Workflow", bold: true }]
 
-  /** 递归渲染一棵 run 树：本体 + 其 subflow 子孙（缩进随深度） */
-  const emitRun = (run: RunProgressSnapshot, topLevelIndex: number): void => {
+  /** 递归渲染一棵 run 树：本体 + 其 subflow 子孙（缩进随深度）
+   *  indentOverride：被父步骤行合并内联的子 run 用步骤缩进（"  "） */
+  const emitRun = (run: RunProgressSnapshot, topLevelIndex: number, indentOverride?: string): void => {
     const vm = toRunViewModel(run, now)
     const isTop = run.parentRunId === undefined
+    const children = childrenOf.get(run.runId) ?? []
     if (isTop) {
       rows.push({
         text: truncate(`${vm.glyph} ${vm.title}  ${vm.duration}${runHeaderSuffix(vm)}`, options?.maxWidth),
@@ -211,7 +222,18 @@ export function renderPanelRows(
         bold: true,
       })
       if (topLevelIndex < expanded) {
+        // subflow:<id> 步骤行与板上子 run 一一配对（同 id 按序消耗），
+        // 配上的子 run 内联到步骤位置，步骤行不再重复渲染
+        const pending = [...children]
         for (const step of vm.steps) {
+          const match = SUBFLOW_STEP_RE.exec(step.label)
+          if (match !== null) {
+            const childIdx = pending.findIndex((c) => c.workflow.id === match[1])
+            if (childIdx !== -1) {
+              emitRun(pending.splice(childIdx, 1)[0]!, topLevelIndex, "  ")
+              continue
+            }
+          }
           const duration = step.duration ? `  ${step.duration}` : ""
           rows.push({
             text: truncate(`  ${step.glyph} ${step.label}${duration}${stepMetaSuffix(step)}`, options?.maxWidth),
@@ -221,9 +243,17 @@ export function renderPanelRows(
         if (vm.failure) {
           rows.push({ text: truncate(`  ↳ ${vm.failure}`, options?.maxWidth), tone: "error" })
         }
+        // 未被步骤认领的子 run（防御：种子缺步骤/板上裁剪）照旧挂尾，不丢信息
+        for (const child of pending) {
+          emitRun(child, topLevelIndex)
+        }
+      } else {
+        for (const child of children) {
+          emitRun(child, topLevelIndex)
+        }
       }
     } else {
-      const indent = "    ".repeat(Math.min(run.depth ?? 1, 3))
+      const indent = indentOverride ?? "    ".repeat(Math.min(run.depth ?? 1, 3))
       const lineage = run.status === "running" ? " ⇢ subflow" : " · subflow"
       rows.push({
         text: truncate(
@@ -235,9 +265,9 @@ export function renderPanelRows(
       if (vm.failure) {
         rows.push({ text: truncate(`${indent}  ↳ ${vm.failure}`, options?.maxWidth), tone: "error" })
       }
-    }
-    for (const child of childrenOf.get(run.runId) ?? []) {
-      emitRun(child, topLevelIndex)
+      for (const child of children) {
+        emitRun(child, topLevelIndex)
+      }
     }
   }
 
